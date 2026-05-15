@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "2.0"
+VERSAO = "2.1"
 DATA_VERSAO = "15/05/2026"
 
 MODULOS = {

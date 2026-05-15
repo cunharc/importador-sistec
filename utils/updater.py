@@ -5,6 +5,7 @@ import sys
 import threading
 import zipfile
 import subprocess
+import re
 import tempfile
 import tkinter as tk
 from tkinter import messagebox
@@ -21,6 +22,11 @@ def comparar_versoes(v_nova, v_atual):
         return nova > atual
     except Exception:
         return v_nova > v_atual
+
+def extrair_versao(texto):
+    # Extrai magicamente apenas a parte numérica de qualquer tag (ex: 'centralsistec-v2.0' -> '2.0')
+    match = re.search(r'(\d+\.\d+(?:\.\d+)?)', texto)
+    return match.group(1) if match else texto.replace('v', '').strip()
 
 def verificar_e_atualizar(root):
     if not getattr(sys, 'frozen', False):
@@ -40,7 +46,7 @@ def verificar_e_atualizar(root):
             with urllib.request.urlopen(req) as response:
                 data = json.loads(response.read().decode())
             
-            versao_github = data['tag_name'].replace('v', '').strip()
+            versao_github = extrair_versao(data.get('tag_name', ''))
             versao_local = str(VERSAO).replace('v', '').strip()
             
             if comparar_versoes(versao_github, versao_local):
