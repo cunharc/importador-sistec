@@ -125,7 +125,7 @@ class TelaNcm(ttk.Frame):
         self.ent_filtro_cfop.bind('<KeyRelease>', lambda event: self._filtrar_treeview())
 
         ttk.Label(frame_filtro, text="Status:").pack(side=tk.LEFT, padx=(10, 5))
-cmb_status_filtro = ttk.Combobox(frame_filtro, textvariable=self.var_status_filtro, values=["Todos", "NOVO", "DIFERENTE", "OK"], state="readonly", width=10)
+        self.cmb_status_filtro = ttk.Combobox(frame_filtro, textvariable=self.var_status_filtro, values=["Todos", "NOVO", "DIFERENTE", "OK"], state="readonly", width=10)
         self.cmb_status_filtro.pack(side=tk.LEFT, padx=(0, 5))
         self.cmb_status_filtro.bind('<<ComboboxSelected>>', lambda event: self._filtrar_treeview())
 
