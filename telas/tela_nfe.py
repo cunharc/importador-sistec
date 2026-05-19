@@ -198,6 +198,11 @@ class TelaNFe(ttk.Frame):
         print("✅ Instância de TelaNFe criada.")
 
         self.xml_files = []
+        self.dados_completos = []
+        self.dados_nfe_lidos = {}
+        self.colunas = ("SELECIONAR", "NF", "TIPO", "CNPJ/CPF", "RAZÃO SOCIAL", "CÓD. ANTIGO", "CONDIÇÃO PGTO", "CÓD. ERP", "STATUS")
+        self.filtros_ativos = {'TIPO': set(), 'CONDIÇÃO PGTO': set(), 'STATUS': set()}
+        self._sort_directions = {col: False for col in self.colunas}
 
         self.config = configparser.ConfigParser()
         self.config.read('config.ini', encoding='utf-8')
@@ -247,16 +252,28 @@ class TelaNFe(ttk.Frame):
         self.progresso = ttk.Progressbar(frame_top, orient=tk.HORIZONTAL, length=150, mode='determinate')
         self.progresso.pack(side=tk.RIGHT, padx=10)
 
+        # Filtros Dinâmicos
+        frame_filtros = ttk.LabelFrame(self, text="Filtros Específicos (Marque quais deseja ver)", padding="10")
+        frame_filtros.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(frame_filtros, text="Filtro Tipo", command=lambda: self._abrir_filtro('TIPO')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_filtros, text="Filtro Cond. Pgto", command=lambda: self._abrir_filtro('CONDIÇÃO PGTO')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_filtros, text="Filtro Status", command=lambda: self._abrir_filtro('STATUS')).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_filtros, text="Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=15)
+
         # Grade (Treeview)
         frame_grade = ttk.Frame(self)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=10)
 
         colunas = ("SELECIONAR", "NF", "TIPO", "CNPJ/CPF", "RAZÃO SOCIAL", "CÓD. ANTIGO", "CONDIÇÃO PGTO", "CÓD. ERP", "STATUS")
         self.tree = ttk.Treeview(frame_grade, columns=colunas, show="headings")
+        self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         
         larguras = [80, 80, 60, 140, 250, 80, 120, 80, 160]
         for col, larg in zip(colunas, larguras):
             self.tree.heading(col, text=col)
+        for col, larg in zip(self.colunas, larguras):
+            self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "RAZÃO SOCIAL" else tk.W)
 
         # Configura as cores (Tags) para os status
@@ -308,9 +325,18 @@ class TelaNFe(ttk.Frame):
             column = self.tree.identify_column(event.x)
             if column == "#1": # Coluna 'SELECIONAR'
                 item = self.tree.identify_row(event.y)
+                if not item: return
                 valores = list(self.tree.item(item, "values"))
                 valores[0] = "☑" if valores[0] == "☐" else "☐"
+                novo_valor = "☑" if valores[0] == "☐" else "☐"
+                valores[0] = novo_valor
                 self.tree.item(item, values=valores)
+                
+                reg_completo = self.dados_nfe_lidos.get(item)
+                for r in self.dados_completos:
+                    if r['reg_completo'] == reg_completo:
+                        r['valores'][0] = novo_valor
+                        break
 
     def _marcar_novos(self):
         """Marca todos os que estão com status NOVO."""
@@ -319,13 +345,141 @@ class TelaNFe(ttk.Frame):
             if "NOVO" in valores[-1]:
                 valores[0] = "☑"
             self.tree.item(item, values=valores)
+        for r in self.dados_completos:
+            if "NOVO" in r['valores'][-1]:
+                r['valores'][0] = "☑"
+        self._renderizar_tabela()
 
     def _desmarcar_todos(self):
         """Desmarca todos os registros da grade."""
+        for r in self.dados_completos:
+            r['valores'][0] = "☐"
+        self._renderizar_tabela()
+
+    def _limpar_filtros(self):
+        for k in self.filtros_ativos:
+            self.filtros_ativos[k] = set()
+        self._renderizar_tabela()
+
+    def _renderizar_tabela(self):
         for item in self.tree.get_children():
             valores = list(self.tree.item(item, "values"))
             valores[0] = "☐"
             self.tree.item(item, values=valores)
+            self.tree.delete(item)
+
+        self.dados_nfe_lidos = {}
+        linhas_filtradas = []
+        for r in self.dados_completos:
+            tipo = str(r['valores'][2])
+            cond_pgto = str(r['valores'][6])
+            status = str(r['valores'][8])
+
+            if self.filtros_ativos.get('TIPO') and tipo not in self.filtros_ativos['TIPO']: continue
+            if self.filtros_ativos.get('CONDIÇÃO PGTO') and cond_pgto not in self.filtros_ativos['CONDIÇÃO PGTO']: continue
+            if self.filtros_ativos.get('STATUS') and status not in self.filtros_ativos['STATUS']: continue
+
+            linhas_filtradas.append(r)
+
+        for r in linhas_filtradas:
+            item_id = self.tree.insert("", tk.END, values=r['valores'], tags=(r['tag'],))
+            self.dados_nfe_lidos[item_id] = r['reg_completo']
+
+        for col in self.colunas:
+            self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
+            self._sort_directions[col] = False
+
+    def _abrir_filtro(self, coluna):
+        if not self.dados_completos: 
+            return messagebox.showwarning("Aviso", "Leia os XMLs primeiro.")
+        
+        idx = self.colunas.index(coluna)
+        valores_unicos = sorted(list(set(str(r['valores'][idx]) for r in self.dados_completos)))
+        
+        top = tk.Toplevel(self)
+        top.title(f"Filtrar por {coluna}")
+        top.geometry("350x450")
+        top.transient(self.winfo_toplevel())
+        top.grab_set()
+
+        frame_search = ttk.Frame(top)
+        frame_search.pack(fill=tk.X, padx=10, pady=(10, 0))
+        ttk.Label(frame_search, text="Buscar:").pack(side=tk.LEFT)
+        ent_search = ttk.Entry(frame_search)
+        ent_search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        frame_list = ttk.Frame(top)
+        frame_list.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        scrollbar = ttk.Scrollbar(frame_list)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        lb = tk.Listbox(frame_list, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set)
+        lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=lb.yview)
+
+        for val in valores_unicos:
+            lb.insert(tk.END, val)
+            if not self.filtros_ativos[coluna] or val in self.filtros_ativos[coluna]:
+                lb.selection_set(tk.END)
+
+        def on_search(event):
+            texto = ent_search.get().lower()
+            if not texto: return
+            items = lb.get(0, tk.END)
+            for i, val in enumerate(items):
+                if texto in val.lower():
+                    lb.see(i)
+                    break
+        ent_search.bind("<KeyRelease>", on_search)
+
+        def aplicar():
+            selecionados = [lb.get(i) for i in lb.curselection()]
+            if len(selecionados) == len(valores_unicos) or not selecionados:
+                self.filtros_ativos[coluna] = set()
+            else:
+                self.filtros_ativos[coluna] = set(selecionados)
+            self._renderizar_tabela()
+            top.destroy()
+
+        def marcar_todos():
+            lb.selection_set(0, tk.END)
+
+        def desmarcar_todos():
+            lb.selection_clear(0, tk.END)
+
+        frame_btn = ttk.Frame(top)
+        frame_btn.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(frame_btn, text="☑ Todos", command=marcar_todos).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_btn, text="☐ Nenhum", command=desmarcar_todos).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_btn, text="Aplicar Filtro", command=aplicar).pack(side=tk.RIGHT, padx=2)
+
+    def _sort_treeview(self, col):
+        self._sort_directions[col] = not self._sort_directions[col]
+        reverse = self._sort_directions[col]
+        
+        l = [(self.tree.set(k, col), k) for k in self.tree.get_children('')]
+        
+        def valor_para_ordenar(val):
+            v = str(val).replace('%', '').strip()
+            if not v or v == '-':
+                return -999999 if reverse else 999999
+            try:
+                return float(v)
+            except ValueError:
+                return v.lower()
+                
+        l.sort(key=lambda t: valor_para_ordenar(t[0]), reverse=reverse)
+        
+        for index, (_, k) in enumerate(l):
+            self.tree.move(k, '', index)
+            
+        for c in self.colunas:
+            if c == col:
+                arrow = " ▼" if self._sort_directions[c] else " ▲"
+            else:
+                arrow = " ↕"
+            self.tree.heading(c, text=c + arrow, command=lambda x=c: self._sort_treeview(x))
 
     def _aplicar_mascara_cpf_cnpj(self, documento: str) -> str:
         doc = ''.join(filter(str.isdigit, str(documento)))
@@ -507,6 +661,14 @@ class TelaNFe(ttk.Frame):
             cond_pgto = res.get('cond_pagto_desc', 'N/I')
             item_id = self.tree.insert("", tk.END, values=(res['check'], "XML NF-e", res['tipo'], doc_formatado, res['razao'], cod_ant, cond_pgto, res.get('cod_erp', '-'), res['status']), tags=(res['tag'],))
             self.dados_nfe_lidos[item_id] = res['reg_completo']
+            linha = [res['check'], "XML NF-e", res['tipo'], doc_formatado, res['razao'], cod_ant, cond_pgto, res.get('cod_erp', '-'), res['status']]
+            self.dados_completos.append({
+                'valores': linha,
+                'tag': res['tag'],
+                'reg_completo': res['reg_completo']
+            })
+
+        self._limpar_filtros()
 
         self.lbl_total.config(text=f"Total: {len(self.xml_files)} arquivo(s)")
         self.progresso['value'] = 0
@@ -530,6 +692,7 @@ class TelaNFe(ttk.Frame):
 
     def _limpar_lista(self):
         self.xml_files = []
+        self.dados_completos = []
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.lbl_total.config(text="Total: 0 arquivo(s)")
@@ -660,6 +823,13 @@ class TelaNFe(ttk.Frame):
                         valores[-2] = r['codigo_gerado'] # Atualiza o CÓD. ERP gerado na tabela
                         valores[-1] = "JÁ CADASTRADO"
                         self.tree.item(item, values=valores, tags=('CADASTRADO',))
+                        
+                        reg_completo = self.dados_nfe_lidos.get(item)
+                        for d in self.dados_completos:
+                            if d['reg_completo'] == reg_completo:
+                                d['valores'] = valores
+                                d['tag'] = 'CADASTRADO'
+                                break
                         self.txt_log.insert(tk.END, f"✅ Importado: {r['razao']} (Cód: {r['codigo_gerado']})\n")
                     else:
                         erro_msg = r.get('_erro_importacao', 'Erro desconhecido')

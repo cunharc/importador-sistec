@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "2.1"
-DATA_VERSAO = "15/05/2026"
+VERSAO = "2.2"
+DATA_VERSAO = "19/05/2026"
 
 MODULOS = {
     "Plano de Contas": {
@@ -10,15 +10,15 @@ MODULOS = {
         "descricao": "Importação de plano de contas"
     },
     "NCM": {
-        "status": "ajustes",
+        "status": "pronto",
         "descricao": "Classificação fiscal de NCMs"
     },
     "CFOP": {
-        "status": "ajustes",
+        "status": "pronto",
         "descricao": "Parametrização de CFOPs"
     },
     "ICMS": {
-        "status": "ajustes",
+        "status": "pronto",
         "descricao": "Matriz de faixas ICMS"
     },
     "Importação XML": {

@@ -28,13 +28,13 @@ def extrair_versao(texto):
     match = re.search(r'(\d+\.\d+(?:\.\d+)?)', texto)
     return match.group(1) if match else texto.replace('v', '').strip()
 
-def verificar_e_atualizar(root):
+def verificar_e_atualizar(root, silencioso=False):
     if not getattr(sys, 'frozen', False):
-        messagebox.showinfo("Aviso", "O sistema não está rodando compilado (.exe). A atualização automática via GitHub só funciona na versão final empacotada.")
+        if not silencioso: messagebox.showinfo("Aviso", "O sistema não está rodando compilado (.exe). A atualização automática via GitHub só funciona na versão final empacotada.")
         return
 
     if GITHUB_REPO == "SEU_USUARIO/SEU_REPOSITORIO":
-        messagebox.showwarning("Atenção", "Você precisa configurar a variável GITHUB_REPO no arquivo utils/updater.py antes de usar!")
+        if not silencioso: messagebox.showwarning("Atenção", "Você precisa configurar a variável GITHUB_REPO no arquivo utils/updater.py antes de usar!")
         return
 
     def task():
@@ -52,9 +52,9 @@ def verificar_e_atualizar(root):
             if comparar_versoes(versao_github, versao_local):
                 root.after(0, _perguntar_atualizacao, root, versao_github, data.get('assets', []))
             else:
-                root.after(0, lambda: messagebox.showinfo("Atualização", "Você já possui a versão mais recente do sistema!"))
+                if not silencioso: root.after(0, lambda: messagebox.showinfo("Atualização", "Você já possui a versão mais recente do sistema!"))
         except Exception as e:
-            root.after(0, lambda e=e: messagebox.showerror("Erro de Conexão", f"Não foi possível consultar o GitHub.\nVerifique sua internet ou a configuração do repositório.\nDetalhe: {e}"))
+            if not silencioso: root.after(0, lambda e=e: messagebox.showerror("Erro de Conexão", f"Não foi possível consultar o GitHub.\nVerifique sua internet ou a configuração do repositório.\nDetalhe: {e}"))
             
     threading.Thread(target=task, daemon=True).start()
 

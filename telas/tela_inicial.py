@@ -35,6 +35,9 @@ class TelaInicial(tk.Frame):
         self.parent.bind('<F5>', self._on_f5)
         
         self._limpar_logs_antigos()
+        
+        # Verificação silenciosa de atualização em background (2 segundos após abrir a tela)
+        self.after(2000, lambda: verificar_e_atualizar(self.winfo_toplevel(), silencioso=True))
 
     def resource_path(self, relative_path):
         try:

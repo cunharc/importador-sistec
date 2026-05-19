@@ -7,6 +7,71 @@ import sys
 
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 
+class DialogoDetalheItens(tk.Toplevel):
+    def __init__(self, parent, itens):
+        super().__init__(parent)
+        self.title(f"Detalhamento de Itens ({len(itens)} registros)")
+        self.geometry("1100x500")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.itens = itens
+        self._criar_widgets()
+        self._carregar_dados()
+
+    def _criar_widgets(self):
+        frame_top = ttk.Frame(self, padding="5")
+        frame_top.pack(fill=tk.X)
+        ttk.Label(frame_top, text="Detalhamento das Notas Fiscais e Itens", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        ttk.Button(frame_top, text="📋 Exportar Excel (CSV)", command=self._exportar_csv).pack(side=tk.RIGHT)
+
+        frame_grade = ttk.Frame(self, padding="5")
+        frame_grade.pack(fill=tk.BOTH, expand=True)
+
+        self.colunas = ("Nº NFE", "EMISSÃO", "CHAVE", "CNPJ/CPF DEST", "RAZÃO SOCIAL DEST", "CÓD. PROD", "PRODUTO", "QTD", "V. UN", "V. TOTAL")
+        self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
+        
+        larguras = [80, 90, 280, 120, 200, 100, 200, 60, 80, 80]
+        for col, larg in zip(self.colunas, larguras):
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=larg, anchor=tk.W if "PRODUTO" in col or "RAZÃO" in col else tk.CENTER)
+
+        scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll_x = ttk.Scrollbar(frame_grade, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscroll=scroll_y.set, xscroll=scroll_x.set)
+        
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _carregar_dados(self):
+        for i in self.itens:
+            nfe = str(i.get('nNF', ''))
+            dh_emi = str(i.get('dhEmi', ''))
+            if 'T' in dh_emi: dh_emi = dh_emi.split('T')[0]
+            chave = str(i.get('chave_nfe', i.get('chNFe', '')))
+            cnpj = str(i.get('dest_cnpj', i.get('emit_cnpj', '')))
+            razao = str(i.get('dest_nome', i.get('emit_nome', '')))
+            cprod = str(i.get('c_prod', ''))
+            xprod = str(i.get('x_prod', ''))
+            qtd = str(i.get('q_com', ''))
+            vun = str(i.get('v_un_com', ''))
+            vtot = str(i.get('v_prod', ''))
+            self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, qtd, vun, vtot))
+
+    def _exportar_csv(self):
+        caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Detalhamento_Itens.csv", filetypes=[("CSV", "*.csv")])
+        if not caminho: return
+        try:
+            with open(caminho, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.writer(f, delimiter=';')
+                writer.writerow(self.colunas)
+                for child in self.tree.get_children():
+                    writer.writerow(self.tree.item(child, "values"))
+            messagebox.showinfo("Sucesso", "Exportação concluída!", parent=self)
+        except Exception as e:
+            messagebox.showerror("Erro", str(e), parent=self)
+
 class TelaAuditoriaGeral(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
         super().__init__(parent, padding="10")
@@ -20,6 +85,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.linhas_agrupadas = []
         self.filtros_ativos = {'NCM': set(), 'CFOP': set(), 'UF DEST': set(), 'CST ICMS': set()}
         self._sort_directions = {}
+        self.dados_detalhe = {}
 
         self._criar_widgets()
 
@@ -88,6 +154,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         self._sort_directions = {col: False for col in self.colunas}
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
+        self.tree.bind("<Double-1>", self._abrir_detalhes)
         
         larguras = [40, 200, 80, 50, 60, 70, 
                     70, 60, 60, 80, 
@@ -114,6 +181,13 @@ class TelaAuditoriaGeral(ttk.Frame):
         
         self.btn_exportar = ttk.Button(frame_fim, text="📋 Exportar Visão Atual (CSV)", state=tk.DISABLED, command=self._exportar_csv)
         self.btn_exportar.pack(side=tk.RIGHT, padx=5)
+
+    def _abrir_detalhes(self, event):
+        region = self.tree.identify_region(event.x, event.y)
+        if region == "cell":
+            item = self.tree.identify_row(event.y)
+            if item in self.dados_detalhe:
+                DialogoDetalheItens(self.winfo_toplevel(), self.dados_detalhe[item])
 
     def _selecionar_pasta(self):
         pasta = filedialog.askdirectory()
@@ -228,7 +302,8 @@ class TelaAuditoriaGeral(ttk.Frame):
                 self._get_distinct(cfops), self._get_distinct(ufs), self._get_distinct(tipos),
                 self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds), self._get_distinct(cbenefs),
                 self._get_distinct(pis_csts), self._get_distinct(p_pis), self._get_distinct(cof_csts), self._get_distinct(p_cof),
-                self._get_distinct(c_class), self._get_distinct(cst_rt), self._get_distinct(p_ibs), self._get_distinct(p_cbs)
+                self._get_distinct(c_class), self._get_distinct(cst_rt), self._get_distinct(p_ibs), self._get_distinct(p_cbs),
+                grupo_itens
             )
             linhas.append(val)
             
@@ -242,6 +317,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         self._renderizar_tabela()
 
     def _renderizar_tabela(self):
+        self.dados_detalhe.clear()
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -260,7 +336,8 @@ class TelaAuditoriaGeral(ttk.Frame):
             linhas_filtradas.append(r)
 
         for r in linhas_filtradas:
-            self.tree.insert("", tk.END, values=r)
+            id_tree = self.tree.insert("", tk.END, values=r[:-1])
+            self.dados_detalhe[id_tree] = r[-1]
 
         for col in self.colunas:
             self.tree.heading(col, text=col + " ↕")

@@ -9,6 +9,35 @@ from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 from utils.importer import FirebirdImporter
 
+REGRAS_RT_MAP = {
+    "000001": {"descricao": "Situações tributadas integralmente pelo IBS e CBS", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "000002": {"descricao": "Exploração de via", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "000003": {"descricao": "Regime automotivo - projetos incentivados (art. 311)", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "000004": {"descricao": "Regime automotivo - projetos incentivados (art. 312)", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "000005": {"descricao": "Operação com EAC (biocombustível)", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "010001": {"descricao": "Operações do FGTS (fora CEF)", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "010002": {"descricao": "Operações do serviço financeiro", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
+    "110001": {"descricao": "Planos de assistência funerária", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "110002": {"descricao": "Planos de assistência à saúde", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "110003": {"descricao": "Intermediação de planos de saúde", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "110005": {"descricao": "Saúde de animais domésticos", "red_ibs": "30%", "red_cbs": "30%", "regra": "Redução de Alíquota"},
+    "200001": {"descricao": "Transporte de bens ZPE / Exportação", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200003": {"descricao": "Vendas de produtos alimentação humana (Anexo I)", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200004": {"descricao": "Dispositivos médicos (Anexo XII)", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200009": {"descricao": "Medicamentos registrados na Anvisa", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200013": {"descricao": "Absorventes higiênicos", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200014": {"descricao": "Hortícolas, frutas e ovos (Anexo XV)", "red_ibs": "100%", "red_cbs": "100%", "regra": "Isenção (Redução 100%)"},
+    "200025": {"descricao": "Serviços de educação (Prouni)", "red_ibs": "60%", "red_cbs": "100%", "regra": "Redução Mista"},
+    "200026": {"descricao": "Locação de imóveis (zonas reabilitadas)", "red_ibs": "80%", "red_cbs": "80%", "regra": "Redução de Alíquota"},
+    "200027": {"descricao": "Locação e arrendamento de imóveis", "red_ibs": "70%", "red_cbs": "70%", "regra": "Redução de Alíquota"},
+    "200028": {"descricao": "Serviços de educação (Anexo II)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "200029": {"descricao": "Serviços de saúde humana (Anexo III)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "200034": {"descricao": "Alimentos para consumo humano (Anexo VII)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "200041": {"descricao": "Insumos agropecuários (Anexo VIII)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "200044": {"descricao": "Produtos de higiene pessoal (Anexo IX)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"},
+    "200048": {"descricao": "Insumos aquícolas (Anexo X)", "red_ibs": "60%", "red_cbs": "60%", "regra": "Redução de Alíquota"}
+}
+
 class DialogoExportarRt(tk.Toplevel):
     def __init__(self, parent, itens, fb_config, callback_sucesso):
         super().__init__(parent)
@@ -349,7 +378,7 @@ class TelaRt(ttk.Frame):
         self.pasta_xmls = ""
         self.dados_grid = {} 
         
-        self.colunas = ("SEL", "QTD", "CÓD. CLASSE TRIB.", "CST IBS/CBS", "% IBS", "% CBS", "STATUS ERP (ID)")
+        self.colunas = ("SEL", "QTD", "CÓD. CLASSE TRIB.", "CST", "DESCRIÇÃO", "RED. IBS", "RED. CBS", "REGRA", "% IBS", "% CBS", "STATUS ERP (ID)")
         self._sort_directions = {col: False for col in self.colunas}
         
         self.config = configparser.ConfigParser()
@@ -401,10 +430,10 @@ class TelaRt(ttk.Frame):
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
         
-        larguras = [40, 60, 150, 150, 100, 100, 150]
+        larguras = [40, 40, 110, 40, 250, 60, 60, 120, 50, 50, 100]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
-            self.tree.column(col, width=larg, anchor=tk.CENTER)
+            self.tree.column(col, width=larg, anchor=tk.W if col == "DESCRIÇÃO" else tk.CENTER)
 
         self.tree.tag_configure('ENCONTRADA', background='#EAFAF1') 
 
@@ -554,8 +583,13 @@ class TelaRt(ttk.Frame):
     def _renderizar_resultados(self, mapa):
         self.dados_grid.clear()
         for r in mapa:
+            c_class_pad = str(r['c_class_trib']).strip().zfill(6) if str(r['c_class_trib']).strip().isdigit() else str(r['c_class_trib']).strip()
+            regra_info = REGRAS_RT_MAP.get(c_class_pad, {"descricao": "-", "red_ibs": "-", "red_cbs": "-", "regra": "-"})
+            
             id_tree = self.tree.insert("", tk.END, values=(
-                "☐", r['ocorrencias'], r['c_class_trib'], r['ibscbs_cst'], f"{r['p_ibs_uf']}%", f"{r['p_cbs']}%", r['status_erp']
+                "☐", r['ocorrencias'], r['c_class_trib'], r['ibscbs_cst'], 
+                regra_info["descricao"], regra_info["red_ibs"], regra_info["red_cbs"], regra_info["regra"],
+                f"{r['p_ibs_uf']}%", f"{r['p_cbs']}%", r['status_erp']
             ), tags=('ENCONTRADA',) if r['status_erp'] != '-' else ())
             self.dados_grid[id_tree] = r
         self.btn_analisar.config(state=tk.NORMAL)

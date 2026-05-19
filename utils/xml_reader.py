@@ -53,7 +53,9 @@ def _parse_det(det_element: ET.Element) -> Dict[str, Any]:
         'ncm': _get(prod, 'NCM'),
         'cfop': _get(prod, 'CFOP'),
         'u_com': _get(prod, 'uCom'),
+        'q_com': _get_float(prod, 'qCom'),
         'v_un_com': _get_float(prod, 'vUnCom'),
+        'v_prod': _get_float(prod, 'vProd'),
         'c_benef': _get(prod, 'cBenef') or '',
     }
 
@@ -485,12 +487,31 @@ def parse_nfe(xml_path: str) -> Dict[str, Any]:
     ender_dest = inf_nfe.find('.//nfe:enderDest', ns) or inf_nfe.find('.//enderDest')
     uf_dest = _get(ender_dest, 'UF') if ender_dest is not None else 'EX'
 
+    ide = inf_nfe.find('.//nfe:ide', ns) or inf_nfe.find('.//ide')
+    nnf = _get(ide, 'nNF') if ide is not None else ''
+    dhemi = _get(ide, 'dhEmi') if ide is not None else ''
+
+    emit = inf_nfe.find('.//nfe:emit', ns) or inf_nfe.find('.//emit')
+    emit_cnpj = _get(emit, 'CNPJ') or _get(emit, 'CPF') if emit is not None else ''
+    emit_nome = _get(emit, 'xNome') if emit is not None else ''
+
+    dest_cnpj = _get(dest, 'CNPJ') or _get(dest, 'CPF') if dest is not None else ''
+    dest_nome = _get(dest, 'xNome') if dest is not None else ''
+
     itens = []
     for det in inf_nfe.findall('nfe:det', ns) or inf_nfe.findall('det'):
         item_data = _parse_det(det)
         item_data['uf_emit'] = uf_emit
         item_data['uf_dest'] = uf_dest
         item_data['tipo_cliente'] = tipo_cliente
+        
+        item_data['nNF'] = nnf
+        item_data['dhEmi'] = dhemi
+        item_data['emit_cnpj'] = emit_cnpj
+        item_data['emit_nome'] = emit_nome
+        item_data['dest_cnpj'] = dest_cnpj
+        item_data['dest_nome'] = dest_nome
+        
         itens.append(item_data)
         
     return {
