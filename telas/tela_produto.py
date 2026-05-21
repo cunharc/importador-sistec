@@ -47,6 +47,7 @@ class TelaProduto(ttk.Frame):
         
         self.colunas = ("CÓD XML", "CÓD ERP", "DESCRIÇÃO XML", "DESCRIÇÃO ERP", "NCM XML", "NCM ERP", "STATUS MATCH")
         self._sort_directions = {col: False for col in self.colunas}
+        self.var_status_filtro = tk.StringVar(value="Todos")
 
         self._criar_widgets()
 
@@ -69,6 +70,31 @@ class TelaProduto(ttk.Frame):
 
         self.lbl_status = ttk.Label(self, text="Aguardando arquivos para cruzar com o Firebird...", font=("Segoe UI", 9))
         self.lbl_status.pack(anchor=tk.W, pady=5)
+
+        # Dashboard Cards
+        self.frame_cards = tk.Frame(self, pady=5)
+        self.frame_cards.pack(fill=tk.X)
+        
+        self.card_vermelho = self._criar_card(
+            self.frame_cards, "🔴 NÃO CADASTRADOS", "0", 
+            "#FFF1F0", "#CF1322", "#F5222D", 
+            lambda e: self._filtrar_por_card("NAO_CADASTRADO")
+        )
+        self.card_vermelho.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        self.card_amarelo = self._criar_card(
+            self.frame_cards, "🟡 DIVERGENTES / SUGERIDOS", "0", 
+            "#FFFBE6", "#D48806", "#FAAD14", 
+            lambda e: self._filtrar_por_card("DIVERGENTE")
+        )
+        self.card_amarelo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+        
+        self.card_verde = self._criar_card(
+            self.frame_cards, "🟢 OK (ENCONTRADOS)", "0", 
+            "#F6FFED", "#389E0D", "#52C41A", 
+            lambda e: self._filtrar_por_card("ENCONTRADO")
+        )
+        self.card_verde.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0))
 
         # Grade (Treeview)
         frame_grade = ttk.Frame(self)
@@ -107,6 +133,30 @@ class TelaProduto(ttk.Frame):
         
         self.btn_ambos = tk.Button(frame_fim, text="🔄 Cadastrar + Tributar", font=("Segoe UI", 9, "bold"), bg="#8E44AD", fg="white", cursor="hand2", state=tk.DISABLED, command=lambda: self._injetar_firebird(modo=3))
         self.btn_ambos.pack(side=tk.RIGHT, padx=5)
+
+    def _criar_card(self, parent, titulo, valor_inicial, bg_color, border_color, text_color, command):
+        card = tk.Frame(parent, bg=bg_color, highlightbackground=border_color, highlightthickness=1, padx=15, pady=10, cursor="hand2")
+        lbl_titulo = tk.Label(card, text=titulo, font=("Segoe UI", 10, "bold"), bg=bg_color, fg=text_color, cursor="hand2")
+        lbl_titulo.pack(anchor=tk.W)
+        lbl_valor = tk.Label(card, text=valor_inicial, font=("Segoe UI", 24, "bold"), bg=bg_color, fg=text_color, cursor="hand2")
+        lbl_valor.pack(anchor=tk.W, pady=(0, 0))
+        card.lbl_valor = lbl_valor 
+        for widget in (card, lbl_titulo, lbl_valor):
+            widget.bind("<Button-1>", command)
+        return card
+
+    def _filtrar_por_card(self, status_selecionado):
+        self.card_vermelho.config(highlightthickness=3 if status_selecionado == "NAO_CADASTRADO" else 1)
+        self.card_amarelo.config(highlightthickness=3 if status_selecionado == "DIVERGENTE" else 1)
+        self.card_verde.config(highlightthickness=3 if status_selecionado == "ENCONTRADO" else 1)
+        self.var_status_filtro.set(status_selecionado)
+        self._renderizar_resultados()
+
+    def _atualizar_contadores(self):
+        if not hasattr(self, 'dados_analisados'): return
+        self.card_vermelho.lbl_valor.config(text=str(sum(1 for item in self.dados_analisados if item['tag'] == "NAO_CADASTRADO")))
+        self.card_amarelo.lbl_valor.config(text=str(sum(1 for item in self.dados_analisados if item['tag'] in ("DIVERGENTE", "SUGERIDO"))))
+        self.card_verde.lbl_valor.config(text=str(sum(1 for item in self.dados_analisados if item['tag'] == "ENCONTRADO")))
 
     def _selecionar_pasta(self):
         pasta = filedialog.askdirectory()
@@ -165,6 +215,11 @@ class TelaProduto(ttk.Frame):
         self.btn_cadastrar.config(state=tk.DISABLED)
         self.btn_tributar.config(state=tk.DISABLED)
         self.btn_ambos.config(state=tk.DISABLED)
+        
+        self.var_status_filtro.set("Todos")
+        self.card_vermelho.config(highlightthickness=1)
+        self.card_amarelo.config(highlightthickness=1)
+        self.card_verde.config(highlightthickness=1)
         self.lbl_status.config(text="Extraindo produtos do XML e cruzando com o Firebird...")
         
         for item in self.tree.get_children(): 
@@ -268,7 +323,18 @@ class TelaProduto(ttk.Frame):
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_resultados(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        status_filtro = getattr(self, 'var_status_filtro', tk.StringVar(value="Todos")).get()
+
         for item in self.dados_analisados:
+            tag = item['tag']
+            if status_filtro != "Todos":
+                if status_filtro == "NAO_CADASTRADO" and tag != "NAO_CADASTRADO": continue
+                if status_filtro == "DIVERGENTE" and tag not in ("DIVERGENTE", "SUGERIDO"): continue
+                if status_filtro == "ENCONTRADO" and tag != "ENCONTRADO": continue
+
             xml = item['xml']
             
             ncm_xml_fmt = self._formatar_ncm(xml.get('ncm', ''))
@@ -292,6 +358,7 @@ class TelaProduto(ttk.Frame):
             self.btn_tributar.config(state=tk.NORMAL)
             self.btn_ambos.config(state=tk.NORMAL)
             
+        self._atualizar_contadores()
         self.lbl_status.config(text=f"Pronto. {len(self.dados_analisados)} produtos únicos analisados.")
 
     def _injetar_firebird(self, modo):

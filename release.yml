@@ -28,12 +28,11 @@ jobs:
 
       - name: 🔨 Compilar o Executável com PyInstaller
         run: |
-          # Adapte os arquivos extras conforme a sua necessidade (ícone, etc)
-          pyinstaller --noconfirm --noconsole --name "Importador_Sistec" --add-data "sistec.jpg;." main.py
+          # Compila como arquivo único sem ofuscação
+          pyinstaller --noconfirm --onefile --noconsole --clean --name "Importador_Sistec" --add-data "sistec.jpg;." main.py
 
       - name: 🗜️ Criar arquivo ZIP
         run: |
-          # Entra na pasta gerada pelo PyInstaller, zipa o executável e todos os arquivos adicionais soltos
           cd dist
           Compress-Archive -Path Importador_Sistec.exe -DestinationPath atualizacao_sistec.zip
 

@@ -10,7 +10,7 @@ MODULOS = {
         "descricao": "Importação de plano de contas"
     },
     "NCM": {
-        "status": "pronto",
+        "status": "ajustes",
         "descricao": "Classificação fiscal de NCMs"
     },
     "CFOP": {

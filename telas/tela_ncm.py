@@ -18,6 +18,127 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - [NCM Sync] - %(message)s'
 )
 
+class DialogoPreviewNCM(tk.Toplevel):
+    def __init__(self, parent, registros, callback_confirmar):
+        super().__init__(parent)
+        self.title("Revisão de NCMs antes de Salvar no ERP")
+        self.geometry("950x600")
+        self.transient(parent)
+        self.grab_set()
+
+        self.registros = registros
+        self.callback_confirmar = callback_confirmar
+        self.item_selecionado = None
+        
+        self._criar_widgets()
+        self._carregar_dados()
+        
+    def _criar_widgets(self):
+        lbl_title = tk.Label(self, text="Revise e ajuste os dados extraídos do XML antes de gravar no ERP:", font=("Segoe UI", 12, "bold"))
+        lbl_title.pack(anchor=tk.W, padx=10, pady=10)
+        
+        frame_grid = ttk.Frame(self)
+        frame_grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        self.colunas = ("NCM", "STATUS", "DESCRIÇÃO", "FAIXA ICMS", "CST PIS", "PIS %", "CST COF", "COFINS %")
+        self.tree = ttk.Treeview(frame_grid, columns=self.colunas, show="headings", selectmode="browse")
+        
+        larguras = [80, 80, 300, 80, 60, 60, 60, 60]
+        for col, larg in zip(self.colunas, larguras):
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=larg, anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
+            
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        
+        scroll_y = ttk.Scrollbar(frame_grid, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=scroll_y.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Frame de Edição Manual
+        frame_edicao = ttk.LabelFrame(self, text="Editar NCM Selecionado", padding="10")
+        frame_edicao.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.var_desc = tk.StringVar()
+        self.var_faixa = tk.StringVar()
+        self.var_cst_pis = tk.StringVar()
+        self.var_pis = tk.DoubleVar()
+        self.var_cst_cof = tk.StringVar()
+        self.var_cof = tk.DoubleVar()
+        
+        ttk.Label(frame_edicao, text="Descrição:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_desc, width=50).grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame_edicao, text="Faixa ICMS:").grid(row=1, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_faixa, width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame_edicao, text="CST PIS:").grid(row=1, column=2, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cst_pis, width=8).grid(row=1, column=3, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame_edicao, text="PIS %:").grid(row=1, column=4, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_pis, width=8).grid(row=1, column=5, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame_edicao, text="CST COF:").grid(row=2, column=2, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cst_cof, width=8).grid(row=2, column=3, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Label(frame_edicao, text="COFINS %:").grid(row=2, column=4, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cof, width=8).grid(row=2, column=5, sticky=tk.W, padx=5, pady=2)
+        
+        ttk.Button(frame_edicao, text="✔️ Aplicar Alteração na Linha", command=self._aplicar_edicao).grid(row=0, column=6, rowspan=3, padx=20)
+        
+        frame_bot = ttk.Frame(self, padding="10")
+        frame_bot.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        ttk.Button(frame_bot, text="❌ Cancelar", command=self.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_bot, text="💾 Confirmar e Salvar no ERP", command=self._confirmar).pack(side=tk.RIGHT, padx=5)
+        
+    def _carregar_dados(self):
+        for i, reg in enumerate(self.registros):
+            self.tree.insert("", tk.END, iid=str(i), values=(
+                reg['ncm'], reg['status'], reg['descricao'], reg['faixa_sugerida'],
+                reg['cst_pis'], reg['pis_sugerido'], reg['cst_cofins'], reg['cofins_sugerido']
+            ))
+            
+    def _on_select(self, event):
+        sel = self.tree.selection()
+        if not sel: return
+        self.item_selecionado = sel[0]
+        idx = int(self.item_selecionado)
+        reg = self.registros[idx]
+        
+        self.var_desc.set(reg['descricao'])
+        self.var_faixa.set(reg['faixa_sugerida'] if reg['faixa_sugerida'] else '')
+        self.var_cst_pis.set(reg['cst_pis'])
+        self.var_pis.set(reg['pis_sugerido'])
+        self.var_cst_cof.set(reg['cst_cofins'])
+        self.var_cof.set(reg['cofins_sugerido'])
+        
+    def _aplicar_edicao(self):
+        if not self.item_selecionado: return
+        idx = int(self.item_selecionado)
+        
+        self.registros[idx]['descricao'] = self.var_desc.get()
+        self.registros[idx]['faixa_sugerida'] = self.var_faixa.get()
+        self.registros[idx]['cst_pis'] = self.var_cst_pis.get()
+        self.registros[idx]['pis_sugerido'] = self.var_pis.get()
+        self.registros[idx]['cst_cofins'] = self.var_cst_cof.get()
+        self.registros[idx]['cofins_sugerido'] = self.var_cof.get()
+        
+        self.tree.item(self.item_selecionado, values=(
+            self.registros[idx]['ncm'],
+            self.registros[idx]['status'],
+            self.registros[idx]['descricao'],
+            self.registros[idx]['faixa_sugerida'],
+            self.registros[idx]['cst_pis'],
+            self.registros[idx]['pis_sugerido'],
+            self.registros[idx]['cst_cofins'],
+            self.registros[idx]['cofins_sugerido']
+        ))
+        
+    def _confirmar(self):
+        self.callback_confirmar(self.registros)
+        self.destroy()
+
 class TelaNcm(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
         super().__init__(parent, padding="10")
@@ -95,6 +216,31 @@ class TelaNcm(ttk.Frame):
         self.progresso = ttk.Progressbar(frame_dir, orient=tk.HORIZONTAL, mode='determinate', length=200)
         self.progresso.pack(side=tk.RIGHT, padx=10)
 
+        # Dashboard Cards
+        self.frame_cards = tk.Frame(self, pady=5)
+        self.frame_cards.pack(fill=tk.X)
+        
+        self.card_vermelho = self._criar_card(
+            self.frame_cards, "🔴 NOVOS (PENDENTES)", "0", 
+            "#FFF1F0", "#CF1322", "#F5222D", 
+            lambda e: self._filtrar_por_card("NOVO")
+        )
+        self.card_vermelho.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        self.card_amarelo = self._criar_card(
+            self.frame_cards, "🟡 DIVERGENTES (ATENÇÃO)", "0", 
+            "#FFFBE6", "#D48806", "#FAAD14", 
+            lambda e: self._filtrar_por_card("DIFERENTE")
+        )
+        self.card_amarelo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
+        
+        self.card_verde = self._criar_card(
+            self.frame_cards, "🟢 VALIDADOS (OK)", "0", 
+            "#F6FFED", "#389E0D", "#52C41A", 
+            lambda e: self._filtrar_por_card("OK")
+        )
+        self.card_verde.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0))
+
         frame_filtro = ttk.Frame(self)
         frame_filtro.pack(fill=tk.X, pady=(5, 10))
 
@@ -171,9 +317,7 @@ class TelaNcm(ttk.Frame):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.tree.bind("<<TreeviewSelect>>", self._on_selecionar_item)
         self.tree.bind("<Button-1>", self._on_tree_click)
-        self.tree.bind("<Double-1>", self._on_tree_double_click)
 
         frame_botoes = ttk.Frame(self)
         frame_botoes.pack(fill=tk.X, pady=5)
@@ -182,53 +326,10 @@ class TelaNcm(ttk.Frame):
         ttk.Button(frame_botoes, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=2)
         
         self.btn_sinc_lote = tk.Button(
-            frame_botoes, text="🚀 Sincronizar Selecionados", font=("Segoe UI", 9, "bold"),
-            bg="#27AE60", fg="#FFFFFF", cursor="hand2", state=tk.DISABLED, command=self._sincronizar_lote
+            frame_botoes, text="✨ Iniciar Assistente (Sincronizar Selecionados)", font=("Segoe UI", 10, "bold"),
+            bg="#27AE60", fg="#FFFFFF", cursor="hand2", state=tk.DISABLED, command=self._sincronizar_lote, padx=10, pady=5
         )
-        self.btn_sinc_lote.pack(side=tk.LEFT, padx=5)
-
-        frame_edicao = ttk.LabelFrame(self, text="Edição do NCM Selecionado", padding="10")
-        frame_edicao.pack(fill=tk.X, padx=5, pady=5)
-        self.frame_edicao = frame_edicao
-        
-        self.var_ncm = tk.StringVar()
-        self.var_desc = tk.StringVar()
-        self.var_faixa = tk.StringVar()
-        self.var_pis = tk.DoubleVar(value=0.0)
-        self.var_cofins = tk.DoubleVar(value=0.0)
-        self.var_cst_pis = tk.StringVar()
-        self.var_cst_cofins = tk.StringVar()
-        
-        ttk.Label(frame_edicao, text="NCM:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_ncm, state="readonly", width=15).grid(row=0, column=1, padx=5, pady=2)
-        
-        ttk.Label(frame_edicao, text="Descrição:").grid(row=0, column=2, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_desc, width=30).grid(row=0, column=3, columnspan=3, padx=5, pady=2, sticky=tk.W)
-
-        ttk.Label(frame_edicao, text="Faixa ICMS:").grid(row=1, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_faixa, width=10).grid(row=1, column=1, padx=5, pady=2, sticky=tk.W)
-        tk.Label(frame_edicao, text="(CFIS_ICMS_VENDA)", font=("Segoe UI", 7), fg="gray").grid(row=2, column=1, sticky=tk.W, padx=5)
-
-        ttk.Label(frame_edicao, text="PIS %:").grid(row=1, column=2, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_pis, width=8).grid(row=1, column=3, padx=5, pady=2, sticky=tk.W)
-
-        ttk.Label(frame_edicao, text="CST PIS:").grid(row=1, column=4, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cst_pis, width=5).grid(row=1, column=5, padx=5, pady=2, sticky=tk.W)
-
-        ttk.Label(frame_edicao, text="COFINS %:").grid(row=2, column=2, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cofins, width=8).grid(row=2, column=3, padx=5, pady=2, sticky=tk.W)
-
-        ttk.Label(frame_edicao, text="CST COF:").grid(row=2, column=4, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cst_cofins, width=5).grid(row=2, column=5, padx=5, pady=2, sticky=tk.W)
-
-        frame_btn = ttk.Frame(frame_edicao)
-        frame_btn.grid(row=3, column=0, columnspan=6, pady=10)
-        
-        self.btn_copiar_xml = ttk.Button(frame_btn, text="⬇ Copiar do XML", state=tk.DISABLED, command=self._copiar_xml)
-        self.btn_copiar_xml.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_salvar = ttk.Button(frame_btn, text="💾 Salvar no ERP", state=tk.DISABLED, command=self._salvar_ncm)
-        self.btn_salvar.pack(side=tk.LEFT, padx=5)
+        self.btn_sinc_lote.pack(side=tk.RIGHT, padx=5)
 
         frame_fim = ttk.Frame(self)
         frame_fim.pack(fill=tk.X, pady=10)
@@ -236,6 +337,36 @@ class TelaNcm(ttk.Frame):
         
         self.btn_exportar = ttk.Button(frame_fim, text="📋 Exportar CSV", state=tk.DISABLED, command=self._exportar_csv)
         self.btn_exportar.pack(side=tk.RIGHT, padx=5)
+
+    def _criar_card(self, parent, titulo, valor_inicial, bg_color, border_color, text_color, command):
+        card = tk.Frame(parent, bg=bg_color, highlightbackground=border_color, highlightthickness=1, padx=15, pady=10, cursor="hand2")
+        lbl_titulo = tk.Label(card, text=titulo, font=("Segoe UI", 10, "bold"), bg=bg_color, fg=text_color, cursor="hand2")
+        lbl_titulo.pack(anchor=tk.W)
+        lbl_valor = tk.Label(card, text=valor_inicial, font=("Segoe UI", 24, "bold"), bg=bg_color, fg=text_color, cursor="hand2")
+        lbl_valor.pack(anchor=tk.W, pady=(0, 0))
+        card.lbl_valor = lbl_valor 
+        for widget in (card, lbl_titulo, lbl_valor):
+            widget.bind("<Button-1>", command)
+        return card
+
+    def _filtrar_por_card(self, status_selecionado):
+        self.card_vermelho.config(highlightthickness=3 if status_selecionado == "NOVO" else 1)
+        self.card_amarelo.config(highlightthickness=3 if status_selecionado == "DIFERENTE" else 1)
+        self.card_verde.config(highlightthickness=3 if status_selecionado == "OK" else 1)
+        
+        self.var_status_filtro.set(status_selecionado)
+        self._filtrar_treeview()
+
+    def _atualizar_contadores(self):
+        if not hasattr(self, 'valores_tree'): return
+        novos = sum(1 for v, tag, g in self.valores_tree if "NOVO" in v[3])
+        diferentes = sum(1 for v, tag, g in self.valores_tree if "DIFERENTE" in v[3] or "MÚLTIPLOS" in v[3])
+        ok = sum(1 for v, tag, g in self.valores_tree if v[3] == "OK")
+        
+        if hasattr(self, 'card_vermelho'):
+            self.card_vermelho.lbl_valor.config(text=str(novos))
+            self.card_amarelo.lbl_valor.config(text=str(diferentes))
+            self.card_verde.lbl_valor.config(text=str(ok))
 
     def _atualizar_progresso(self, valor, texto):
         if hasattr(self, 'progresso'):
@@ -277,13 +408,10 @@ class TelaNcm(ttk.Frame):
         if self.var_escopo.get() == "UNIFICADO":
             self.edit_mode_enabled = False
             self.btn_sinc_lote.config(state=tk.DISABLED)
-            self.btn_copiar_xml.config(state=tk.DISABLED)
-            self.btn_salvar.config(state=tk.DISABLED)
             messagebox.showinfo("Modo Unificado", "No modo unificado, a visualização é consolidada para toda a empresa.\n\nA edição e sincronização de NCMs são desabilitadas.", parent=self)
         else:
             self.edit_mode_enabled = True
             self._atualizar_selecionados()
-            self._on_selecionar_item(None)
 
     def _get_distinct_from_list(self, lista_de_dicionarios, chave):
         s = set(str(d.get(chave, '')).strip() for d in lista_de_dicionarios if d.get(chave) is not None and str(d.get(chave, '')).strip() != "")
@@ -463,20 +591,6 @@ class TelaNcm(ttk.Frame):
                     self._atualizar_selecionados()
                     return "break"  # Impede seleção da linha
 
-    def _on_tree_double_click(self, event):
-        if not self.edit_mode_enabled:
-            return
-
-        region = self.tree.identify_region(event.x, event.y)
-        if region == "cell":
-            item_id = self.tree.identify_row(event.y)
-            if item_id:
-                grupo = self.dados_grid.get(item_id)
-                valores = self.tree.item(item_id, 'values')
-                sys_item = self.dados_sistema.get(grupo['ncm']) if grupo else None
-                if grupo and valores:
-                    DialogoDetalhesNcm(self, grupo, valores, sys_item)
-
     def _atualizar_selecionados(self):
         """Atualiza a lista de itens selecionados."""
         if not self.edit_mode_enabled:
@@ -489,52 +603,6 @@ class TelaNcm(ttk.Frame):
             self.btn_sinc_lote.config(state=tk.NORMAL)
         else:
             self.btn_sinc_lote.config(state=tk.DISABLED)
-
-    def _on_selecionar_item(self, event):
-        if not self.edit_mode_enabled:
-            self.btn_copiar_xml.config(state=tk.DISABLED)
-            self.btn_salvar.config(state=tk.DISABLED)
-            return
-
-        selecao = self.tree.selection()
-        
-        if len(self.selecionados_lote) > 1:
-            self.btn_copiar_xml.config(state=tk.DISABLED)
-            self.btn_salvar.config(state=tk.DISABLED)
-            return
-        
-        if not selecao:
-            self.btn_copiar_xml.config(state=tk.DISABLED)
-            self.btn_salvar.config(state=tk.DISABLED)
-            return
-            
-        self.btn_copiar_xml.config(state=tk.NORMAL)
-        self.btn_salvar.config(state=tk.NORMAL)
-        
-        item_id = selecao[0]
-        valores = self.tree.item(item_id, "values")
-        
-        self.var_ncm.set(valores[2])
-        self.var_desc.set(valores[4])
-        
-        faixa = valores[28] if valores[28] != '-' else ''
-        if faixa == '*VÁRIOS*' or ' / ' in str(faixa):
-            faixa = str(faixa).split(' / ')[0].replace('*VÁRIOS*', '').strip()
-        self.var_faixa.set(faixa)
-        
-        status = valores[3]
-        if "NOVO" in status:
-            self.var_pis.set(self._extrair_float(valores[18]))
-            self.var_cofins.set(self._extrair_float(valores[21]))
-            self.var_cst_pis.set(self._extrair_cst(valores[17]))
-            self.var_cst_cofins.set(self._extrair_cst(valores[20]))
-            self.btn_salvar.config(text="➕ Cadastrar NCM")
-        else:
-            self.var_pis.set(self._extrair_float(valores[19]))
-            self.var_cofins.set(self._extrair_float(valores[22]))
-            self.var_cst_pis.set(self._extrair_cst(valores[17]))
-            self.var_cst_cofins.set(self._extrair_cst(valores[20]))
-            self.btn_salvar.config(text="💾 Atualizar NCM")
 
     def _selecionar_todos(self):
         for item in self.tree.get_children():
@@ -549,81 +617,6 @@ class TelaNcm(ttk.Frame):
             valores[0] = '☐'
             self.tree.item(item, values=valores)
         self._atualizar_selecionados()
-
-    def _copiar_xml(self):
-        valores = self.tree.item(self.tree.selection()[0], "values")
-        faixa = valores[27] if valores[27] != '-' else ''
-        if faixa == '*VÁRIOS*' or ' / ' in str(faixa):
-            faixa = str(faixa).split(' / ')[0].replace('*VÁRIOS*', '').strip()
-        self.var_faixa.set(faixa)
-        
-        self.var_pis.set(self._extrair_float(valores[18]))
-        self.var_cofins.set(self._extrair_float(valores[21]))
-        self.var_cst_pis.set(self._extrair_cst(valores[17]))
-        self.var_cst_cofins.set(self._extrair_cst(valores[20]))
-        messagebox.showinfo("Copiado", "Dados do XML copiados. Verifique a Faixa ICMS sugerida.")
-
-    def _salvar_ncm(self):
-        ncm_limpo = self.var_ncm.get()
-        if not ncm_limpo: return
-            
-        empresa = self.config.get('IMPORTACAO', 'empresa', fallback='1')
-        filial = self.config.get('IMPORTACAO', 'filial', fallback='1')
-        
-        ncm_fmt = f"{ncm_limpo[:4]}.{ncm_limpo[4:6]}.{ncm_limpo[6:]}" if len(ncm_limpo) == 8 else ncm_limpo
-        faixa = self.var_faixa.get().strip()
-        
-        try:
-            pis = float(self.var_pis.get())
-            cofins = float(self.var_cofins.get())
-        except Exception:
-            return messagebox.showwarning("Aviso", "Alíquotas inválidas.")
-            
-        cst_pis = self._formatar_cst(self.var_cst_pis.get())
-        cst_cof = self._formatar_cst(self.var_cst_cofins.get())
-        
-        msg = f"NCM: {ncm_fmt}\n\nCampos:\n• CFIS_ICMS_VENDA = {faixa or '(vazio)'}\n• PIS = {pis}% | CST = {cst_pis}\n• COFINS = {cofins}% | CST = {cst_cof}"
-        
-        if not messagebox.askyesno("Confirmar", msg):
-            return
-        
-        try:
-            with FirebirdService(self.config_db) as fb:
-                sql_check = "SELECT 1 FROM TABELA_class_fiscal WHERE CFIS_EMPRESA = ? AND CFIS_FILIAL = ? AND CFIS_CODIGO = ?"
-                existe = fb.query(sql_check, [empresa, filial, ncm_fmt])
-                cursor = fb.conn.cursor() if hasattr(fb, 'conn') else None
-                
-                desc = self.var_desc.get().strip()[:200]
-                
-                if existe:
-                    campos = ["CFIS_PIS = ?", "CFIS_COFINS = ?", "CFIS_CST_PIS = ?", "CFIS_CST_COFINS = ?"]
-                    params = [pis, cofins, cst_pis, cst_cof]
-                    if desc:
-                        campos.append("CFIS_DESCRICAO = ?")
-                        params.append(desc)
-                    if faixa:
-                        campos.append("CFIS_ICMS_VENDA = ?")
-                        params.append(faixa)
-                    sql_up = f"UPDATE TABELA_class_fiscal SET {', '.join(campos)} WHERE CFIS_EMPRESA = ? AND CFIS_FILIAL = ? AND CFIS_CODIGO = ?"
-                    params.extend([empresa, filial, ncm_fmt])
-                    if cursor: cursor.execute(sql_up, params)
-                    else: fb.execute(sql_up, params)
-                else:
-                    sql_in = """INSERT INTO TABELA_class_fiscal 
-                        (CFIS_EMPRESA, CFIS_FILIAL, CFIS_CODIGO, CFIS_DESCRICAO, CFIS_ICMS_VENDA, 
-                         CFIS_PIS, CFIS_COFINS, CFIS_CST_PIS, CFIS_CST_COFINS, CFIS_IPI, CFIS_CST_IPI) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, '53')"""
-                    params = (empresa, filial, ncm_fmt, desc, faixa, pis, cofins, cst_pis, cst_cof)
-                    if cursor: cursor.execute(sql_in, params)
-                    else: fb.execute(sql_in, params)
-                
-                if cursor: fb.conn.commit()
-                
-            messagebox.showinfo("Sucesso", f"NCM {ncm_fmt} gravado!\n\nCFIS_ICMS_VENDA = {faixa}")
-            self._iniciar_analise()
-        except Exception as e:
-            logging.error(f"Erro ao salvar NCM {ncm_fmt}: {e}")
-            messagebox.showerror("Erro", f"Erro ao gravar:\n{e}")
 
     def _iniciar_analise(self):
         if not self.pasta_xmls and not self.arquivos_selecionados:
@@ -656,9 +649,6 @@ class TelaNcm(ttk.Frame):
 
     def _toggle_edit_mode(self, enabled):
         state = tk.NORMAL if enabled and self.edit_mode_enabled else tk.DISABLED
-        for widget in self.frame_edicao.winfo_children():
-            if isinstance(widget, (ttk.Entry, ttk.Button, tk.Button)):
-                widget.config(state=state)
         self.btn_sinc_lote.config(state=state)
         if not enabled:
             self.btn_sinc_lote.config(state=tk.DISABLED)
@@ -901,18 +891,8 @@ class TelaNcm(ttk.Frame):
         self.btn_cancelar.config(state=tk.DISABLED)
         self.btn_exportar.config(state=tk.NORMAL)
         self._atualizar_progresso(100, f"Renderizando tabela...")
-        self._renderizar_tudo()
-
-    def _renderizar_tudo(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.dados_grid.clear()
-
-        for valores, tag, grupo in self.filtered_tree:
-            item_id = self.tree.insert("", tk.END, values=valores, tags=(tag,))
-            self.dados_grid[item_id] = grupo
-
-        self.lbl_status.config(text=f"Pronto. {len(self.filtered_tree)} resultados exibidos.")
+        self._atualizar_contadores()
+        self._filtrar_treeview()
 
     def _filtrar_treeview(self):
         filtro = self.var_filtro.get().strip().lower()
@@ -920,13 +900,16 @@ class TelaNcm(ttk.Frame):
         filtro_uf = self.var_filtro_uf.get().strip().lower()
         filtro_cfop = self.var_filtro_cfop.get().strip().lower()
         status = self.var_status_filtro.get()
-        if not self.valores_tree:
+        if not hasattr(self, 'valores_tree') or not self.valores_tree:
             return
 
         filtrados = []
         for valores, tag, grupo in self.valores_tree:
-            if status != "Todos" and valores[3] != status:
-                continue
+            status_item = valores[3]
+            if status != "Todos":
+                if status == "NOVO" and "NOVO" not in status_item: continue
+                if status == "DIFERENTE" and "DIFERENTE" not in status_item and "MÚLTIPLOS" not in status_item: continue
+                if status == "OK" and status_item != "OK": continue
 
             if filtro:
                 texto_procura = filtro
@@ -948,7 +931,16 @@ class TelaNcm(ttk.Frame):
             filtrados.append((valores, tag, grupo))
 
         self.filtered_tree = filtrados
-        self._renderizar_tudo()
+        
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.dados_grid.clear()
+
+        for vals, tg, grp in self.filtered_tree:
+            item_id = self.tree.insert("", tk.END, values=vals, tags=(tg,))
+            self.dados_grid[item_id] = grp
+
+        self.lbl_status.config(text=f"Pronto. {len(self.filtered_tree)} resultados exibidos.")
 
     def _limpar_filtro(self):
         self.var_filtro.set("")
@@ -957,7 +949,7 @@ class TelaNcm(ttk.Frame):
         self.var_filtro_cfop.set("")
         self.var_status_filtro.set("Todos")
         self.filtered_tree = self.valores_tree[:]
-        self._renderizar_tudo()
+        self._filtrar_treeview()
 
     def _sincronizar_ncm_erp(self):
         caminho_json = filedialog.askopenfilename(title="JSON do Governo", filetypes=[("JSON", "*.json")])
@@ -1048,35 +1040,43 @@ class TelaNcm(ttk.Frame):
                 ignorados_multiplos += 1
                 continue
 
-            if status in ("NOVO", "DIFERENTE"):
-                registros_para_salvar.append({
-                    'grupo': grupo,
-                    'status': status,
-                    'faixa_sugerida': valores[27] if valores[27] != '-' else None,
-                    'pis_sugerido': valores[18] if valores[18] != '-' else '0.0%',
-                    'cofins_sugerido': valores[21] if valores[21] != '-' else '0.0%',
-                })
+            ncm_limpo = grupo['ncm']
+            faixa = valores[27] if valores[27] != '-' else ''
+            pis = self._extrair_float(valores[18])
+            cofins = self._extrair_float(valores[21])
+            cst_pis = self._extrair_cst(grupo.get('pis_cst', ''))
+            cst_cofins = self._extrair_cst(grupo.get('cofins_cst', ''))
+            
+            desc_oficial = getattr(self, 'ncm_governo', {}).get(ncm_limpo, grupo['descricao'])
+            
+            registros_para_salvar.append({
+                'ncm': ncm_limpo,
+                'status': status,
+                'descricao': desc_oficial[:200],
+                'faixa_sugerida': faixa,
+                'pis_sugerido': pis,
+                'cofins_sugerido': cofins,
+                'cst_pis': cst_pis,
+                'cst_cofins': cst_cofins
+            })
 
         if not registros_para_salvar:
-            return messagebox.showinfo("Aviso", "Nenhum item 'NOVO' ou 'DIFERENTE' selecionado.")
-            msg = "Nenhum item 'NOVO' ou 'DIFERENTE' uniforme selecionado."
+            msg = "Nenhum item válido selecionado."
             if ignorados_multiplos > 0:
                 msg += f"\n\n⚠️ {ignorados_multiplos} NCM(s) com múltiplas variações foram ignorados. Edite-os individualmente!"
             return messagebox.showinfo("Aviso", msg)
 
-        msg = f"Você está prestes a sincronizar {len(registros_para_salvar)} NCM(s) com o ERP.\n"
-        msg += "Isso irá INSERIR novos NCMs e ATUALIZAR existentes com base nos dados do XML.\n\n"
         if ignorados_multiplos > 0:
-            msg += f"\n⚠️ ATENÇÃO: {ignorados_multiplos} NCM(s) com múltiplas variações foram ignorados na sincronização em lote e deverão ser salvos manualmente.\n"
-        msg += "\nIsso irá INSERIR novos NCMs e ATUALIZAR existentes com base nos dados do XML.\n\n"
-        msg += "Deseja continuar?"
-        if not messagebox.askyesno("Confirmar Sincronização", msg):
-            return
-        
+            messagebox.showwarning("Aviso Múltiplos", f"{ignorados_multiplos} NCM(s) com múltiplas variações foram ignorados. Edite-os individualmente.")
+
+        # Abre o Modal para revisão e edição manual (O Novo "Wizard")
+        DialogoPreviewNCM(self.winfo_toplevel(), registros_para_salvar, self._iniciar_sincronizacao_thread)
+
+    def _iniciar_sincronizacao_thread(self, registros):
         self.btn_sinc_lote.config(state=tk.DISABLED, text="Sincronizando...")
         self.btn_analisar.config(state=tk.DISABLED)
 
-        threading.Thread(target=self._executar_sincronizacao_bg, args=(registros_para_salvar,), daemon=True).start()
+        threading.Thread(target=self._executar_sincronizacao_bg, args=(registros,), daemon=True).start()
 
     def _executar_sincronizacao_bg(self, registros):
         empresa = self.config.get('IMPORTACAO', 'empresa', fallback='1')
@@ -1091,23 +1091,23 @@ class TelaNcm(ttk.Frame):
                 cursor = fb.conn.cursor()
                 for reg in registros:
                     try:
-                        grupo = reg['grupo']
-                        ncm_limpo = grupo['ncm']
+                        ncm_limpo = reg['ncm']
                         ncm_fmt = f"{ncm_limpo[:4]}.{ncm_limpo[4:6]}.{ncm_limpo[6:]}" if len(ncm_limpo) == 8 else ncm_limpo
                         
-                        desc_oficial = getattr(self, 'ncm_governo', {}).get(ncm_limpo, grupo['descricao'])
-                        desc_oficial = str(desc_oficial)[:200]
+                        desc_oficial = reg['descricao']
 
                         faixa = reg['faixa_sugerida']
                         if faixa == '*VÁRIOS*' or ' / ' in str(faixa):
                             faixa = str(faixa).split(' / ')[0].replace('*VÁRIOS*', '').strip() or None
+                        elif not faixa:
+                            faixa = None
 
-                        pis_alq = self._extrair_float(reg['pis_sugerido'])
-                        cofins_alq = self._extrair_float(reg['cofins_sugerido'])
-                        cst_pis = self._extrair_cst(grupo.get('pis_cst', ''))
-                        cst_cofins = self._extrair_cst(grupo.get('cofins_cst', ''))
+                        pis_alq = self._extrair_float(str(reg['pis_sugerido']).replace(',', '.'))
+                        cofins_alq = self._extrair_float(str(reg['cofins_sugerido']).replace(',', '.'))
+                        cst_pis = self._extrair_cst(str(reg['cst_pis']))
+                        cst_cofins = self._extrair_cst(str(reg['cst_cofins']))
 
-                        if reg['status'] == 'NOVO':
+                        if 'NOVO' in reg['status']:
                             sql_in = """INSERT INTO TABELA_class_fiscal 
                                         (CFIS_EMPRESA, CFIS_FILIAL, CFIS_CODIGO, CFIS_DESCRICAO, CFIS_ICMS_VENDA, 
                                          CFIS_PIS, CFIS_COFINS, CFIS_CST_PIS, CFIS_CST_COFINS, CFIS_IPI, CFIS_CST_IPI) 
@@ -1115,12 +1115,12 @@ class TelaNcm(ttk.Frame):
                             params = (empresa, filial, ncm_fmt, desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins)
                             cursor.execute(sql_in, params)
                             sucesso_ins += 1
-                        elif reg['status'] == 'DIFERENTE':
+                        else:
                             sql_up = """UPDATE TABELA_class_fiscal SET 
-                                            CFIS_ICMS_VENDA = ?, CFIS_PIS = ?, CFIS_COFINS = ?, 
+                                            CFIS_DESCRICAO = ?, CFIS_ICMS_VENDA = ?, CFIS_PIS = ?, CFIS_COFINS = ?, 
                                             CFIS_CST_PIS = ?, CFIS_CST_COFINS = ?
                                         WHERE CFIS_EMPRESA = ? AND CFIS_FILIAL = ? AND CFIS_CODIGO = ?"""
-                            params = (faixa, pis_alq, cofins_alq, cst_pis, cst_cofins, empresa, filial, ncm_fmt)
+                            params = (desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins, empresa, filial, ncm_fmt)
                             cursor.execute(sql_up, params)
                             sucesso_upd += 1
                     except Exception as e:
