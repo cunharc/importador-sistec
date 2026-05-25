@@ -18,6 +18,7 @@ from telas.tela_rt import TelaRt
 from telas.tela_lista_precos import TelaListaPrecos
 from telas.tela_auditoria_geral import TelaAuditoriaGeral
 from telas.tela_sobre import TelaSobre
+from telas.tela_importacao_planilha_produtos import TelaImportacaoPlanilhaProdutos
 from utils.firebird_service import FirebirdService
 from utils.updater import verificar_e_atualizar
 from version import get_info, get_modulos_prontos, get_modulos_em_ajuste
@@ -105,6 +106,7 @@ class TelaInicial(tk.Frame):
         cards_frame.grid_rowconfigure(0, weight=1, uniform="row")
         cards_frame.grid_rowconfigure(1, weight=1, uniform="row")
         cards_frame.grid_rowconfigure(2, weight=1, uniform="row")
+        cards_frame.grid_rowconfigure(3, weight=1, uniform="row")
         
         # Card 1: Importar Plano de Contas
         self._criar_card_modulo(
@@ -203,6 +205,17 @@ class TelaInicial(tk.Frame):
             comando=self._abrir_auditoria_geral,
             icone_path=None,
             icone_emoji="📊"
+        )
+
+        # Card 10: Importar Produtos via Planilha
+        self._criar_card_modulo(
+            parent=cards_frame, row=3, col=0,
+            titulo="Importar Produtos (Excel)",
+            descricao="Importação e auto-cadastro de produtos, grupos e subgrupos via planilha (XLSX/CSV).",
+            cor_borda="#27AE60",
+            comando=self._abrir_importacao_planilha_produtos,
+            icone_path=None,
+            icone_emoji="📝"
         )
 
         # --- RODAPÉ ---
@@ -563,6 +576,13 @@ class TelaInicial(tk.Frame):
         self.nome_tela_atual = "Plano de Contas"
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaImportacao(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_produtos(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Produtos via Planilha - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Produtos via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaProdutos(self.parent, callback_voltar=self._voltar_inicial)
 
     def _abrir_sobre(self):
         self._registrar_log("Sobre o Sistema", "ABRIU")
