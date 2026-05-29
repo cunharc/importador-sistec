@@ -17,7 +17,7 @@ jobs:
       - name: 🐍 Configurar Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # Você pode ajustar para 3.8 se preferir
+          python-version: '3.10'
           cache: 'pip'
 
       - name: 📦 Instalar dependências
@@ -28,7 +28,6 @@ jobs:
 
       - name: 🔨 Compilar o Executável com PyInstaller
         run: |
-          # Compila como arquivo único sem ofuscação
           pyinstaller --noconfirm --onefile --noconsole --clean --name "Importador_Sistec" --add-data "sistec.jpg;." main.py
 
       - name: 🗜️ Criar arquivo ZIP
