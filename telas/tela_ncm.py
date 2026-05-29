@@ -59,12 +59,12 @@ class DialogoPreviewNCM(tk.Toplevel):
         frame_edicao = ttk.LabelFrame(self, text="Editar NCM Selecionado", padding="10")
         frame_edicao.pack(fill=tk.X, padx=10, pady=10)
         
-        self.var_desc = tk.StringVar()
-        self.var_faixa = tk.StringVar()
-        self.var_cst_pis = tk.StringVar()
-        self.var_pis = tk.DoubleVar()
-        self.var_cst_cof = tk.StringVar()
-        self.var_cof = tk.DoubleVar()
+        self.var_desc = tk.StringVar(self)
+        self.var_faixa = tk.StringVar(self)
+        self.var_cst_pis = tk.StringVar(self)
+        self.var_pis = tk.DoubleVar(self)
+        self.var_cst_cof = tk.StringVar(self)
+        self.var_cof = tk.DoubleVar(self)
         
         ttk.Label(frame_edicao, text="Descrição:").grid(row=0, column=0, sticky=tk.W, padx=5)
         ttk.Entry(frame_edicao, textvariable=self.var_desc, width=50).grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
@@ -184,7 +184,7 @@ class TelaNcm(ttk.Frame):
         frame_escopo = ttk.LabelFrame(self, text="Escopo da Análise", padding="10")
         frame_escopo.pack(fill=tk.X, pady=5)
 
-        self.var_escopo = tk.StringVar(value="FILIAL_ATUAL")
+        self.var_escopo = tk.StringVar(self, value="FILIAL_ATUAL")
 
         rb_filial = ttk.Radiobutton(frame_escopo, text="Apenas Filial Atual", variable=self.var_escopo, value="FILIAL_ATUAL", command=self._on_escopo_change)
         rb_filial.pack(side=tk.LEFT, padx=10)
@@ -244,11 +244,11 @@ class TelaNcm(ttk.Frame):
         frame_filtro = ttk.Frame(self)
         frame_filtro.pack(fill=tk.X, pady=(5, 10))
 
-        self.var_filtro = tk.StringVar()
-        self.var_filtro_ncm = tk.StringVar()
-        self.var_filtro_uf = tk.StringVar()
-        self.var_filtro_cfop = tk.StringVar()
-        self.var_status_filtro = tk.StringVar(value="Todos")
+        self.var_filtro = tk.StringVar(self)
+        self.var_filtro_ncm = tk.StringVar(self)
+        self.var_filtro_uf = tk.StringVar(self)
+        self.var_filtro_cfop = tk.StringVar(self)
+        self.var_status_filtro = tk.StringVar(self, value="Todos")
 
         ttk.Label(frame_filtro, text="Buscar:").pack(side=tk.LEFT, padx=(0, 5))
         self.ent_filtro = ttk.Entry(frame_filtro, textvariable=self.var_filtro, width=20)
@@ -455,6 +455,9 @@ class TelaNcm(ttk.Frame):
     def _fechar_tela(self):
         if self.winfo_manager():
             self.pack_forget()
+        # Se o usuário voltar de tela com uma leitura rolando, mata o thread interno
+        if hasattr(self, 'cancel_event'):
+            self.cancel_event.set()
         self.destroy()
         if self.callback_voltar: 
             self.callback_voltar()

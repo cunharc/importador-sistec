@@ -5,7 +5,7 @@ import os
 PyInstaller.__main__.run([
     'main.py',
     '--name=Importador_Sistec',
-    '--onedir',
+    '--onefile',
     '--noconsole',
     '--clean',
     '--noconfirm',
@@ -17,15 +17,15 @@ PyInstaller.__main__.run([
     '--add-binary=fbclient_*.dll;.'
 ])
 
-# --- PÓS-COMPILAÇÃO: ORGANIZANDO A PASTA DO CLIENTE ---
-pasta_dist = os.path.join('dist', 'Importador_Sistec')
+
+arquivo_dist = os.path.join('dist', 'Importador_Sistec.exe')
 
 # Copia o arquivo config.ini (se você tiver um) para a pasta do cliente
-if os.path.exists('config.ini'):
-    shutil.copy('config.ini', pasta_dist)
-    print("\n✅ config.ini copiado para a pasta do executável.")
+if os.path.exists('config.ini') and os.path.exists('dist'):
+    shutil.copy('config.ini', 'dist')
+    print("\n✅ config.ini copiado para a pasta dist.")
 
 print("-" * 50)
 print("🚀 COMPILAÇÃO E PREPARAÇÃO CONCLUÍDAS COM SUCESSO!")
-print(f"👉 Tudo o que o seu cliente precisa está na pasta: {os.path.abspath(pasta_dist)}")
-print("Basta zipar essa pasta e enviar. NENHUM código-fonte (.py) vai junto!")
+print(f"👉 O seu executável único está pronto aqui: {os.path.abspath(arquivo_dist)}")
+print("Basta enviar apenas esse arquivo .exe para o seu cliente!")

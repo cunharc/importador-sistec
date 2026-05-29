@@ -72,9 +72,9 @@ class DialogoExportarIcms(tk.Toplevel):
         # Checkboxes de Tipos CF
         frame_chk = ttk.LabelFrame(frame_top, text="Gravar regras para quais Tipos de Cliente?", padding="5")
         frame_chk.pack(side=tk.RIGHT, padx=10)
-        self.var_ct = tk.BooleanVar(value=True)
-        self.var_nc = tk.BooleanVar(value=True)
-        self.var_sn = tk.BooleanVar(value=True)
+        self.var_ct = tk.BooleanVar(self, value=True)
+        self.var_nc = tk.BooleanVar(self, value=True)
+        self.var_sn = tk.BooleanVar(self, value=True)
         ttk.Checkbutton(frame_chk, text="Contribuinte (CT)", variable=self.var_ct).pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(frame_chk, text="Não Contrib. (NC)", variable=self.var_nc).pack(side=tk.LEFT, padx=5)
         ttk.Checkbutton(frame_chk, text="Simples Nac. (SN)", variable=self.var_sn).pack(side=tk.LEFT, padx=5)

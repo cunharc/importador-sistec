@@ -60,7 +60,7 @@ class DialogoDetalheItens(tk.Toplevel):
             self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, qtd, vun, vtot))
 
     def _exportar_csv(self):
-        caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Detalhamento_Itens.csv", filetypes=[("CSV", "*.csv")])
+        caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Detalhamento_Itens_Produto.csv", filetypes=[("CSV", "*.csv")])
         if not caminho: return
         try:
             with open(caminho, 'w', newline='', encoding='utf-8-sig') as f:
@@ -72,7 +72,8 @@ class DialogoDetalheItens(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Erro", str(e), parent=self)
 
-class TelaAuditoriaGeral(ttk.Frame):
+
+class TelaAuditoriaPorProduto(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
         super().__init__(parent, padding="10")
         self.parent = parent
@@ -83,14 +84,14 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.pasta_xmls = ""
         self.itens_lidos = []
         self.linhas_agrupadas = []
-        self.filtros_ativos = {'NCM': set(), 'CFOP': set(), 'UF DEST': set(), 'CST ICMS': set()}
+        self.filtros_ativos = {'CÓD PRODUTO': set(), 'NCM': set(), 'CFOP': set(), 'CST ICMS': set()}
         self._sort_directions = {}
         self.dados_detalhe = {}
 
         self._criar_widgets()
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="AUDITORIA GERAL DE TRIBUTAÇÃO (GERENCIAL)", font=("Segoe UI", 14, "bold"), fg="#2C3E50")
+        lbl_title = tk.Label(self, text="AUDITORIA DE TRIBUTAÇÃO POR PRODUTO", font=("Segoe UI", 14, "bold"), fg="#16A085")
         lbl_title.pack(anchor=tk.W, pady=(0, 10))
 
         frame_dir = ttk.Frame(self)
@@ -107,36 +108,13 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.lbl_status = ttk.Label(frame_dir, text="Aguardando...", font=("Segoe UI", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
-        # Frame de Agrupamento Dinâmico
-        frame_grp = ttk.LabelFrame(self, text="Opções de Agrupamento (Selecione como deseja montar a visão)", padding="10")
-        frame_grp.pack(fill=tk.X, pady=5)
-
-        self.var_grp_prod = tk.BooleanVar(self, value=False)
-        self.var_grp_ncm = tk.BooleanVar(self, value=True)
-        self.var_grp_cfop = tk.BooleanVar(self, value=True)
-        self.var_grp_uf = tk.BooleanVar(self, value=True)
-        self.var_grp_tipo_cli = tk.BooleanVar(self, value=True)
-        self.var_grp_icms = tk.BooleanVar(self, value=True)
-        self.var_grp_piscof = tk.BooleanVar(self, value=False)
-        self.var_grp_rt = tk.BooleanVar(self, value=False)
-
-        ttk.Checkbutton(frame_grp, text="Produto", variable=self.var_grp_prod, command=self._processar_agrupamento).grid(row=0, column=0, sticky=tk.W, padx=10)
-        ttk.Checkbutton(frame_grp, text="NCM", variable=self.var_grp_ncm, command=self._processar_agrupamento).grid(row=0, column=1, sticky=tk.W, padx=10)
-        ttk.Checkbutton(frame_grp, text="CFOP", variable=self.var_grp_cfop, command=self._processar_agrupamento).grid(row=0, column=2, sticky=tk.W, padx=10)
-        ttk.Checkbutton(frame_grp, text="UF Destino", variable=self.var_grp_uf, command=self._processar_agrupamento).grid(row=0, column=3, sticky=tk.W, padx=10)
-        
-        ttk.Checkbutton(frame_grp, text="Tipo Cliente (CT/NC/SN)", variable=self.var_grp_tipo_cli, command=self._processar_agrupamento).grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
-        ttk.Checkbutton(frame_grp, text="Regras ICMS (CST, Aliq, cBenef)", variable=self.var_grp_icms, command=self._processar_agrupamento).grid(row=1, column=1, sticky=tk.W, padx=10, pady=5)
-        ttk.Checkbutton(frame_grp, text="Regras PIS/COFINS", variable=self.var_grp_piscof, command=self._processar_agrupamento).grid(row=1, column=2, sticky=tk.W, padx=10, pady=5)
-        ttk.Checkbutton(frame_grp, text="Reforma Tributária (IBS/CBS)", variable=self.var_grp_rt, command=self._processar_agrupamento).grid(row=1, column=3, sticky=tk.W, padx=10, pady=5)
-
         # Filtros Dinâmicos
         frame_filtros = ttk.LabelFrame(self, text="Filtros Específicos (Marque quais deseja ver)", padding="10")
         frame_filtros.pack(fill=tk.X, pady=5)
         
+        ttk.Button(frame_filtros, text="Filtro Produto", command=lambda: self._abrir_filtro('CÓD PRODUTO')).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_filtros, text="Filtro NCM", command=lambda: self._abrir_filtro('NCM')).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_filtros, text="Filtro CFOP", command=lambda: self._abrir_filtro('CFOP')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_filtros, text="Filtro UF", command=lambda: self._abrir_filtro('UF DEST')).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_filtros, text="Filtro CST ICMS", command=lambda: self._abrir_filtro('CST ICMS')).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_filtros, text="Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=15)
 
@@ -145,7 +123,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.colunas = (
-            "QTD", "PRODUTO", "NCM", "CFOP", "UF DEST", "TIPO CLI",
+            "QTD", "CÓD PRODUTO", "DESCRIÇÃO PRODUTO", "NCM", "CFOP", "UF DEST", "TIPO CLI",
             "CST ICMS", "% ICMS", "% RED.BC", "CBENEF",
             "CST PIS", "% PIS", "CST COF", "% COF",
             "CLASSE RT", "CST RT", "% IBS", "% CBS"
@@ -156,14 +134,14 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         self.tree.bind("<Double-1>", self._abrir_detalhes)
         
-        larguras = [40, 200, 80, 50, 60, 70, 
+        larguras = [40, 100, 200, 80, 50, 60, 70, 
                     70, 60, 60, 80, 
                     60, 50, 60, 50, 
                     90, 60, 50, 50]
         
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
-            anchor = tk.W if col == "PRODUTO" else tk.CENTER
+            anchor = tk.W if col in ("DESCRIÇÃO PRODUTO",) else tk.CENTER
             self.tree.column(col, width=larg, anchor=anchor)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
@@ -229,80 +207,63 @@ class TelaAuditoriaGeral(ttk.Frame):
         finally:
             self.parent.after(0, lambda: self.btn_carregar.config(state=tk.NORMAL))
 
-    def _get_distinct(self, lista):
-        s = set(str(x).strip() for x in lista if x is not None and str(x).strip() != "")
-        if not s: return "-"
-        if len(s) == 1: return list(s)[0]
-        lst = sorted(list(s))
-        if len(lst) <= 3:
-            return " / ".join(lst)
-        return "*VÁRIOS*"
-
     def _processar_agrupamento(self):
         if not self.itens_lidos:
             return
 
         self.lbl_status.config(text="Aplicando agrupamento...")
-        
-        grp_prod = self.var_grp_prod.get()
-        grp_ncm = self.var_grp_ncm.get()
-        grp_cfop = self.var_grp_cfop.get()
-        grp_uf = self.var_grp_uf.get()
-        grp_tipo_cli = self.var_grp_tipo_cli.get()
-        grp_icms = self.var_grp_icms.get()
-        grp_piscof = self.var_grp_piscof.get()
-        grp_rt = self.var_grp_rt.get()
 
         mapa = {}
         for i in self.itens_lidos:
-            chave = []
-            if grp_prod: chave.append(str(i.get('cProd', '')))
-            if grp_ncm: chave.append(str(i.get('ncm', '')))
-            if grp_cfop: chave.append(str(i.get('cfop', '')))
-            if grp_uf: chave.append(str(i.get('uf_dest', '')))
-            if grp_tipo_cli: chave.append(str(i.get('tipo_cliente', 'CT')))
-            if grp_icms:
-                chave.extend([str(i.get('icms_cst', '')), str(i.get('p_icms', 0)), str(i.get('p_red_bc', 0)), str(i.get('c_benef', ''))])
-            if grp_piscof:
-                chave.extend([str(i.get('pis_cst', '')), str(i.get('p_pis', 0)), str(i.get('cofins_cst', '')), str(i.get('p_cofins', 0))])
-            if grp_rt:
-                chave.extend([str(i.get('c_class_trib', '')), str(i.get('ibscbs_cst', '')), str(i.get('p_ibs_uf', 0)), str(i.get('p_cbs', 0))])
-                
-            chave_tupla = tuple(chave)
-            if chave_tupla not in mapa:
-                mapa[chave_tupla] = []
-            mapa[chave_tupla].append(i)
+            chave = (
+                str(i.get('c_prod', i.get('cProd', ''))),
+                str(i.get('x_prod', i.get('xProd', ''))),
+                str(i.get('ncm', '')),
+                str(i.get('cfop', '')),
+                str(i.get('uf_dest', '')),
+                str(i.get('tipo_cliente', 'CT')),
+                str(i.get('icms_cst', '')),
+                str(i.get('p_icms', 0)),
+                str(i.get('p_red_bc', 0)),
+                str(i.get('c_benef', '')),
+                str(i.get('pis_cst', '')),
+                str(i.get('p_pis', 0)),
+                str(i.get('cofins_cst', '')),
+                str(i.get('p_cofins', 0)),
+                str(i.get('c_class_trib', '')),
+                str(i.get('ibscbs_cst', '')),
+                str(i.get('p_ibs_uf', 0)),
+                str(i.get('p_cbs', 0))
+            )
+            
+            if chave not in mapa:
+                mapa[chave] = []
+            mapa[chave].append(i)
 
         linhas = []
-        for grupo_itens in mapa.values():
+        for chave_tupla, grupo_itens in mapa.items():
             qtd = len(grupo_itens)
-            produtos = [f"{i.get('cProd','')} - {i.get('xProd','')}" for i in grupo_itens]
-            ncms = [i.get('ncm', '') for i in grupo_itens]
-            cfops = [i.get('cfop', '') for i in grupo_itens]
-            ufs = [i.get('uf_dest', '') for i in grupo_itens]
-            tipos = [i.get('tipo_cliente', 'CT') for i in grupo_itens]
-            
-            icms_csts = [i.get('icms_cst', '') for i in grupo_itens]
-            p_icms = [i.get('p_icms', 0) for i in grupo_itens]
-            p_reds = [i.get('p_red_bc', 0) for i in grupo_itens]
-            cbenefs = [i.get('c_benef', '') for i in grupo_itens]
-            
-            pis_csts = [str(i.get('pis_cst', '')).zfill(2) if i.get('pis_cst') else '' for i in grupo_itens]
-            p_pis = [i.get('p_pis', 0) for i in grupo_itens]
-            cof_csts = [str(i.get('cofins_cst', '')).zfill(2) if i.get('cofins_cst') else '' for i in grupo_itens]
-            p_cof = [i.get('p_cofins', 0) for i in grupo_itens]
-            
-            c_class = [i.get('c_class_trib', '') for i in grupo_itens]
-            cst_rt = [i.get('ibscbs_cst', '') for i in grupo_itens]
-            p_ibs = [i.get('p_ibs_uf', 0) for i in grupo_itens]
-            p_cbs = [i.get('p_cbs', 0) for i in grupo_itens]
             
             val = (
-                qtd, self._get_distinct(produtos), self._get_distinct(ncms),
-                self._get_distinct(cfops), self._get_distinct(ufs), self._get_distinct(tipos),
-                self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds), self._get_distinct(cbenefs),
-                self._get_distinct(pis_csts), self._get_distinct(p_pis), self._get_distinct(cof_csts), self._get_distinct(p_cof),
-                self._get_distinct(c_class), self._get_distinct(cst_rt), self._get_distinct(p_ibs), self._get_distinct(p_cbs),
+                qtd,
+                chave_tupla[0], # CÓD PRODUTO
+                chave_tupla[1], # DESCRIÇÃO PRODUTO
+                chave_tupla[2], # NCM
+                chave_tupla[3], # CFOP
+                chave_tupla[4], # UF DEST
+                chave_tupla[5], # TIPO CLI
+                chave_tupla[6], # CST ICMS
+                chave_tupla[7], # % ICMS
+                chave_tupla[8], # % RED.BC
+                chave_tupla[9], # CBENEF
+                str(chave_tupla[10]).zfill(2) if chave_tupla[10] else '', # CST PIS
+                chave_tupla[11], # % PIS
+                str(chave_tupla[12]).zfill(2) if chave_tupla[12] else '', # CST COF
+                chave_tupla[13], # % COF
+                chave_tupla[14], # CLASSE RT
+                chave_tupla[15], # CST RT
+                chave_tupla[16], # % IBS
+                chave_tupla[17], # % CBS
                 grupo_itens
             )
             linhas.append(val)
@@ -323,14 +284,14 @@ class TelaAuditoriaGeral(ttk.Frame):
 
         linhas_filtradas = []
         for r in self.linhas_agrupadas:
+            cod_prod = str(r[self.colunas.index('CÓD PRODUTO')])
             ncm = str(r[self.colunas.index('NCM')])
             cfop = str(r[self.colunas.index('CFOP')])
-            uf = str(r[self.colunas.index('UF DEST')])
             cst_icms = str(r[self.colunas.index('CST ICMS')])
 
+            if self.filtros_ativos.get('CÓD PRODUTO') and cod_prod not in self.filtros_ativos['CÓD PRODUTO']: continue
             if self.filtros_ativos.get('NCM') and ncm not in self.filtros_ativos['NCM']: continue
             if self.filtros_ativos.get('CFOP') and cfop not in self.filtros_ativos['CFOP']: continue
-            if self.filtros_ativos.get('UF DEST') and uf not in self.filtros_ativos['UF DEST']: continue
             if self.filtros_ativos.get('CST ICMS') and cst_icms not in self.filtros_ativos['CST ICMS']: continue
 
             linhas_filtradas.append(r)
@@ -439,7 +400,7 @@ class TelaAuditoriaGeral(ttk.Frame):
             self.tree.heading(c, text=c + arrow, command=lambda x=c: self._sort_treeview(x))
 
     def _exportar_csv(self):
-        caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Auditoria_Tributaria_Geral.csv", filetypes=[("CSV", "*.csv")])
+        caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Auditoria_Tributaria_Por_Produto.csv", filetypes=[("CSV", "*.csv")])
         if not caminho: return
         try:
             with open(caminho, 'w', newline='', encoding='utf-8-sig') as f:

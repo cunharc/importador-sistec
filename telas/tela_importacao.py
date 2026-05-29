@@ -20,7 +20,7 @@ class TelaImportacao(ttk.Frame):
         self.registros_lidos = []
         self.cancelado = False
 
-        self.var_limpar_banco = tk.BooleanVar()
+        self.var_limpar_banco = tk.BooleanVar(self)
         self.config = configparser.ConfigParser()
         self.config.read('config.ini', encoding='utf-8')
 

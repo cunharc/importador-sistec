@@ -46,7 +46,7 @@ class TelaListaPrecos(ttk.Frame):
         frame_lista = ttk.LabelFrame(self, text="Configuração da Lista de Preços", padding="10")
         frame_lista.pack(fill=tk.X, pady=5)
 
-        self.var_modo = tk.StringVar(value="EXISTENTE")
+        self.var_modo = tk.StringVar(self, value="EXISTENTE")
 
         # Modo Atualizar Existente
         rb_existente = ttk.Radiobutton(frame_lista, text="Atualizar Lista Existente:", variable=self.var_modo, value="EXISTENTE", command=self._toggle_modo)

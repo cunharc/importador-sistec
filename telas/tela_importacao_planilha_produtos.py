@@ -64,7 +64,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         self.cb_tipo.set("4 - Produto Acabado")
         self.cb_tipo.bind("<<ComboboxSelected>>", lambda e: self._atualizar_tipo_preview())
 
-        self.var_producao = tk.BooleanVar(value=False)
+        self.var_producao = tk.BooleanVar(self, value=False)
         ttk.Checkbutton(frame_top, text="Integra Produção Sistec", variable=self.var_producao).grid(row=1, column=4, padx=15)
 
         # Frame Mapeamento de Colunas

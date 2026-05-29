@@ -17,6 +17,7 @@ from telas.tela_icms import TelaIcms
 from telas.tela_rt import TelaRt
 from telas.tela_lista_precos import TelaListaPrecos
 from telas.tela_auditoria_geral import TelaAuditoriaGeral
+from telas.tela_auditoria_por_produto import TelaAuditoriaPorProduto
 from telas.tela_sobre import TelaSobre
 from telas.tela_importacao_planilha_produtos import TelaImportacaoPlanilhaProdutos
 from utils.firebird_service import FirebirdService
@@ -64,36 +65,37 @@ class TelaInicial(tk.Frame):
                 
         tk.Label(header, text="CENTRAL DE IMPLANTAÇÃO", font=("Segoe UI", 16, "bold"), bg="#FFFFFF", fg="#003399").pack(side=tk.LEFT, padx=20)
         
-        # Versão no header
-        tk.Label(header, text=get_info(), font=("Segoe UI", 9), bg="#FFFFFF", fg="#666666").pack(side=tk.RIGHT, padx=10, anchor=tk.SE)
-        
         # --- STATUS DA CONEXÃO NO HEADER ---
         status_frame = tk.Frame(header, bg="#FFFFFF")
-        status_frame.pack(side=tk.RIGHT, padx=20)
+        status_frame.pack(side=tk.RIGHT, padx=10)
+        
+        # Versão no header
+        tk.Label(header, text=get_info(), font=("Segoe UI", 9), bg="#FFFFFF", fg="#666666").pack(side=tk.RIGHT, padx=5, anchor=tk.SE)
+        
+        # Botão Configurar Banco embalado primeiro (à direita) para nunca sumir em monitores pequenos
+        btn_config_db = tk.Button(status_frame, text="⚙ Configurar Banco", font=("Segoe UI", 9), bg="#F0F0F0", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", command=self._abrir_config_banco)
+        btn_config_db.pack(side=tk.RIGHT, padx=5)
+
+        # Combo para Empresa/Filial com tamanho reduzido para telas menores
+        self.cb_filial = ttk.Combobox(status_frame, width=25, state="readonly", cursor="hand2")
+        self.cb_filial.pack(side=tk.RIGHT, padx=5)
+        self.cb_filial.bind("<<ComboboxSelected>>", self._salvar_filial_selecionada)
+        self.filiais_data = []
         
         status_labels = tk.Frame(status_frame, bg="#FFFFFF")
-        status_labels.pack(side=tk.LEFT, padx=10)
+        status_labels.pack(side=tk.RIGHT, padx=5)
         
         self.lbl_status_db = tk.Label(status_labels, text="Verificando...", font=("Segoe UI", 10, "bold"), bg="#FFFFFF", fg="#F39C12")
         self.lbl_status_db.pack(anchor=tk.E)
         self.lbl_path_db = tk.Label(status_labels, text="", font=("Segoe UI", 8), bg="#FFFFFF", fg="#7F8C8D")
         self.lbl_path_db.pack(anchor=tk.E)
-
-        # Combo para Empresa/Filial
-        self.cb_filial = ttk.Combobox(status_frame, width=45, state="readonly", cursor="hand2")
-        self.cb_filial.pack(side=tk.LEFT, padx=10)
-        self.cb_filial.bind("<<ComboboxSelected>>", self._salvar_filial_selecionada)
-        self.filiais_data = []
-
-        btn_config_db = tk.Button(status_frame, text="⚙ Configurar Banco", font=("Segoe UI", 9), bg="#F0F0F0", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", command=self._abrir_config_banco)
-        btn_config_db.pack(side=tk.LEFT)
         
         # Atualiza o status de conexão ao abrir a central
         self.after(800, self._atualizar_status)
 
         # --- CONTEÚDO PRINCIPAL ---
         content = tk.Frame(self, bg="#F0F0F0")
-        content.pack(fill=tk.BOTH, expand=True, padx=40, pady=40)
+        content.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         tk.Label(content, text="Módulos Disponíveis", font=("Segoe UI", 14), bg="#F0F0F0", fg="#1A1A1A").pack(anchor=tk.W, pady=(0, 20))
         
@@ -102,7 +104,7 @@ class TelaInicial(tk.Frame):
         cards_frame.pack(fill=tk.X, expand=False, pady=10)
         
         for i in range(3):
-            cards_frame.grid_columnconfigure(i, weight=1, uniform="col")
+            cards_frame.grid_columnconfigure(i, weight=1, uniform="col", minsize=300)
         cards_frame.grid_rowconfigure(0, weight=1, uniform="row")
         cards_frame.grid_rowconfigure(1, weight=1, uniform="row")
         cards_frame.grid_rowconfigure(2, weight=1, uniform="row")
@@ -216,6 +218,17 @@ class TelaInicial(tk.Frame):
             comando=self._abrir_importacao_planilha_produtos,
             icone_path=None,
             icone_emoji="📝"
+        )
+
+        # Card 11: Auditoria por Produto
+        self._criar_card_modulo(
+            parent=cards_frame, row=3, col=1,
+            titulo="Auditoria por Produto",
+            descricao="Auditoria cruzando todas as variações de tributação que um mesmo produto sofreu nos XMLs.",
+            cor_borda="#8E44AD",
+            comando=self._abrir_auditoria_produto,
+            icone_path=None,
+            icone_emoji="🔎"
         )
 
         # --- RODAPÉ ---
@@ -583,6 +596,13 @@ class TelaInicial(tk.Frame):
         self.nome_tela_atual = "Importação de Produtos via Planilha"
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaImportacaoPlanilhaProdutos(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_auditoria_produto(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Auditoria por Produto - Implantação Sistec")
+        self.nome_tela_atual = "Auditoria por Produto"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaAuditoriaPorProduto(self.parent, callback_voltar=self._voltar_inicial)
 
     def _abrir_sobre(self):
         self._registrar_log("Sobre o Sistema", "ABRIU")

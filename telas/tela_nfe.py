@@ -17,6 +17,7 @@ class ToolTip(object):
         self.x = self.y = 0
         self.widget.bind("<Enter>", self.enter)
         self.widget.bind("<Leave>", self.leave)
+        self.widget.bind("<ButtonPress>", self.leave)
 
     def enter(self, event=None):
         self.schedule()
@@ -36,15 +37,17 @@ class ToolTip(object):
             self.widget.after_cancel(id)
 
     def showtip(self, event=None):
-        x, y, cx, cy = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 20
+        if not self.widget.winfo_exists():
+            return
+        
+        x = self.widget.winfo_rootx() + 25
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
         self.tipwindow = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry("+%d+%d" % (x, y))
         label = tk.Label(tw, text=self.text, justify=tk.LEFT,
-                         background="#ffffe0", relief=tk.SOLID, borderwidth=1,
-                         font=("tahoma", "8", "normal"))
+                         background="#ffffe0", foreground="#1A1A1A", relief=tk.SOLID, borderwidth=1,
+                         font=("Segoe UI", 9, "normal"), padx=5, pady=3)
         label.pack(ipadx=1)
 
     def hidetip(self):
@@ -61,6 +64,7 @@ class DialogoVincularCondPagto(tk.Toplevel):
         self.grab_set()
         self.title("Vincular Condições de Pagamento Novas")
         self.geometry("850x600")
+        self.protocol("WM_DELETE_WINDOW", self._cancelar)
 
         self.condicoes_novas = sorted(condicoes_novas)
         self.condicoes_existentes = sorted(condicoes_existentes, key=lambda x: x[1]) # Sort by description
@@ -265,13 +269,9 @@ class TelaNFe(ttk.Frame):
         frame_grade = ttk.Frame(self)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        colunas = ("SELECIONAR", "NF", "TIPO", "CNPJ/CPF", "RAZÃO SOCIAL", "CÓD. ANTIGO", "CONDIÇÃO PGTO", "CÓD. ERP", "STATUS")
-        self.tree = ttk.Treeview(frame_grade, columns=colunas, show="headings")
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         
         larguras = [80, 80, 60, 140, 250, 80, 120, 80, 160]
-        for col, larg in zip(colunas, larguras):
-            self.tree.heading(col, text=col)
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "RAZÃO SOCIAL" else tk.W)
@@ -650,6 +650,9 @@ class TelaNFe(ttk.Frame):
         self._estado_botoes(tk.NORMAL)
 
     def _finalizar_carregamento(self, novos_arquivos, resultados, erros_leitura=None):
+        # Impede a thread órfã de injetar dados numa interface já destruída
+        if not self.winfo_exists(): return
+        
         self.xml_files.extend(novos_arquivos)
         
         if not hasattr(self, 'dados_nfe_lidos'):
