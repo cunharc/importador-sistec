@@ -135,29 +135,72 @@ def _baixar_e_aplicar(root, url, versao_nova="Desconhecida"):
                 
             # 3. Cria um arquivo .bat que fecha o software, troca os arquivos e o reinicia automaticamente
             bat_path = os.path.join(temp_dir, "atualizar.bat")
-            current_dir = os.getcwd()
+            install_dir = os.path.dirname(sys.executable)
             exe_name = os.path.basename(sys.executable)
+            log_path_bat = os.path.join(temp_dir, "sistec_update_log.txt")
             
             bat_content = f"""@echo off
-:: Solicita privilegios de administrador caso seja necessario (Resolve C:\\Program Files)
-net session >nul 2>&1
-if %errorLevel% neq 0 (
-    powershell -Command "Start-Process '%~f0' -Verb RunAs"
-    exit /b
+setlocal enabledelayedexpansion
+set LOG={log_path_bat}
+echo [%date% %time%] Iniciando atualizacao... > %LOG%
+
+:: Mata o processo atual
+echo [%date% %time%] Matando processo {exe_name}... >> %LOG%
+taskkill /F /IM "{exe_name}" > NUL 2>&1
+if %errorlevel% neq 0 (
+    echo [%date% %time%] Aviso: processo ja estava encerrado >> %LOG%
 )
 
-echo Atualizando o Sistema Sistec... Por favor, aguarde a tela preta fechar sozinha.
-timeout /t 2 /nobreak > NUL
-taskkill /F /IM "{exe_name}" > NUL 2>&1
-xcopy /s /y /q "{extract_dir}\\*" "{current_dir}\\"
-start "" /D "{current_dir}" "{current_dir}\\Importador_Sistec.exe"
+:: Aguarda o sistema liberar o arquivo
+echo [%date% %time%] Aguardando 3 segundos... >> %LOG%
+timeout /t 3 /nobreak > NUL
+
+:: Tenta copiar sem elevacao (funciona em Downloads, Desktop, etc.)
+echo [%date% %time%] Tentando copiar sem elevacao... >> %LOG%
+copy /y "{extract_dir}\\Importador_Sistec.exe" "{install_dir}\\Importador_Sistec.exe" >> %LOG% 2>&1
+if %errorlevel% equ 0 (
+    echo [%date% %time%] Copia sem elevacao OK >> %LOG%
+    goto :sucesso
+)
+
+:: Se falhou, tenta com elevacao de administrador (so para copiar)
+echo [%date% %time%] Copia sem elevacao falhou, tentando com admin... >> %LOG%
+powershell -Command "Start-Process cmd -ArgumentList '/c copy /y \"\"{extract_dir}\\Importador_Sistec.exe\"\" \"\"{install_dir}\\Importador_Sistec.exe\"\"' -Verb RunAs -Wait"
+if %errorlevel% equ 0 (
+    echo [%date% %time%] Copia com admin OK >> %LOG%
+    start "" /D "{install_dir}" "{install_dir}\\Importador_Sistec.exe"
+    goto :fim
+)
+
+:: Se chegou aqui, tudo falhou
+echo [%date% %time%] ERRO: Nao foi possivel copiar o arquivo! >> %LOG%
+echo ========================================
+echo        FALHA NA ATUALIZACAO
+echo ========================================
+echo.
+echo Nao foi possivel substituir o arquivo:
+echo   {install_dir}\\Importador_Sistec.exe
+echo.
+echo Motivo: provavelmente falta de permissao de escrita.
+echo Tente executar o programa como Administrador e tentar novamente.
+echo.
+echo Detalhes em: %LOG%
+pause
+exit /b 1
+
+:sucesso
+echo [%date% %time%] Iniciando novo executavel... >> %LOG%
+start "" /D "{install_dir}" "{install_dir}\\Importador_Sistec.exe"
+
+:fim
+echo [%date% %time%] Concluido >> %LOG%
 del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             
             # --- REGISTRO DE HISTÓRICO DE ATUALIZAÇÃO ---
-            log_path = os.path.join(current_dir, "historico_atualizacoes.log")
+            log_path = os.path.join(install_dir, "historico_atualizacoes.log")
             try:
                 data_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 with open(log_path, "a", encoding="utf-8") as f_log:
@@ -171,6 +214,8 @@ del "%~f0"
             else:
                 subprocess.Popen(f'"{bat_path}"', shell=True)
             
+            import time
+            time.sleep(1)
             os._exit(0)
             
         except Exception as e:
