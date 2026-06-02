@@ -20,6 +20,7 @@ from telas.tela_auditoria_geral import TelaAuditoriaGeral
 from telas.tela_auditoria_por_produto import TelaAuditoriaPorProduto
 from telas.tela_sobre import TelaSobre
 from telas.tela_importacao_planilha_produtos import TelaImportacaoPlanilhaProdutos
+from busca_logs import BuscaLogsWindow
 from utils.firebird_service import FirebirdService
 from utils.updater import verificar_e_atualizar
 from version import get_info, get_modulos_prontos, get_modulos_em_ajuste
@@ -99,9 +100,31 @@ class TelaInicial(tk.Frame):
         
         tk.Label(content, text="Módulos Disponíveis", font=("Segoe UI", 14), bg="#F0F0F0", fg="#1A1A1A").pack(anchor=tk.W, pady=(0, 20))
         
-        # Grade de Cards
-        cards_frame = tk.Frame(content, bg="#F0F0F0")
-        cards_frame.pack(fill=tk.X, expand=False, pady=10)
+        # --- ROLAGEM DOS CARDS (Scrollbar) ---
+        # Necessário pois as 4 linhas de cards podem cortar em monitores menores
+        canvas_container = tk.Frame(content, bg="#F0F0F0")
+        canvas_container.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(canvas_container, bg="#F0F0F0", highlightthickness=0)
+        scroll_y = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL, command=canvas.yview)
+        
+        cards_frame = tk.Frame(canvas, bg="#F0F0F0")
+        cards_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        
+        canvas_window = canvas.create_window((0, 0), window=cards_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scroll_y.set)
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        def _configure_canvas_width(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _configure_canvas_width)
+        
+        def _on_mousewheel(event):
+            if canvas.winfo_viewable():
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.parent.bind_all("<MouseWheel>", _on_mousewheel)
         
         for i in range(3):
             cards_frame.grid_columnconfigure(i, weight=1, uniform="col", minsize=300)
@@ -229,6 +252,16 @@ class TelaInicial(tk.Frame):
             comando=self._abrir_auditoria_produto,
             icone_path=None,
             icone_emoji="🔎"
+        )
+
+        # NOVO CARD: Pesquisa de Logs
+        self._criar_card_modulo(
+            parent=cards_frame, row=3, col=2,
+            titulo="Busca em Logs ERP",
+            descricao="Varredura avançada e rápida em arquivos .txt de log gerados pelo ERP.",
+            cor_borda="#F39C12",
+            comando=self._abrir_busca_logs,
+            icone_emoji="🕵️‍♂️"
         )
 
         # --- RODAPÉ ---
@@ -603,6 +636,11 @@ class TelaInicial(tk.Frame):
         self.nome_tela_atual = "Auditoria por Produto"
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaAuditoriaPorProduto(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_busca_logs(self):
+        self._registrar_log("Busca de Logs ERP", "ABRIU")
+        # Abre como uma janela sobreposta sem fechar a central (Toplevel nativo do módulo)
+        BuscaLogsWindow(parent=self.winfo_toplevel())
 
     def _abrir_sobre(self):
         self._registrar_log("Sobre o Sistema", "ABRIU")

@@ -8,7 +8,9 @@ import subprocess
 import re
 import tempfile
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
+from datetime import datetime
+import shutil
 from version import VERSAO
 
 # IMPORTANTE: Coloque o seu usuário e repositório oficial do GitHub (precisa ser um repositório Público)
@@ -69,18 +71,31 @@ def _perguntar_atualizacao(root, versao_nova, assets):
     if resp:
         # Baixa o primeiro asset do GitHub (o seu arquivo .zip compilado)
         download_url = assets[0]['browser_download_url']
-        _baixar_e_aplicar(root, download_url)
+        _baixar_e_aplicar(root, download_url, versao_nova)
 
-def _baixar_e_aplicar(root, url):
+def _baixar_e_aplicar(root, url, versao_nova="Desconhecida"):
     aviso = tk.Toplevel(root)
     aviso.title("Atualizando...")
-    aviso.geometry("320x120")
+    aviso.geometry("350x150")
     aviso.transient(root)
     aviso.grab_set()
     
     lbl = tk.Label(aviso, text="Baixando atualização...\nIsso pode levar alguns minutos.", font=("Segoe UI", 11))
-    lbl.pack(expand=True)
+    lbl.pack(pady=10)
+    
+    progress = ttk.Progressbar(aviso, orient=tk.HORIZONTAL, length=280, mode='determinate')
+    progress.pack(pady=5)
+    
+    lbl_status = tk.Label(aviso, text="0%", font=("Segoe UI", 9))
+    lbl_status.pack()
     root.update_idletasks()
+
+    def update_gui(pct, down_mb, tot_mb):
+        progress['value'] = pct
+        if tot_mb > 0:
+            lbl_status.config(text=f"{pct}% ({down_mb:.1f} MB de {tot_mb:.1f} MB)")
+        else:
+            lbl_status.config(text=f"Baixado: {down_mb:.1f} MB")
 
     def task():
         try:
@@ -88,30 +103,75 @@ def _baixar_e_aplicar(root, url):
             zip_path = os.path.join(temp_dir, "atualizacao_sistec.zip")
             extract_dir = os.path.join(temp_dir, "sistec_update")
             
-            # 1. Baixa o ZIP do GitHub
-            urllib.request.urlretrieve(url, zip_path)
+            if os.path.exists(extract_dir):
+                shutil.rmtree(extract_dir)
+            os.makedirs(extract_dir, exist_ok=True)
             
-            # 2. Extrai silenciosamente para uma pasta temporária
+            # 1. Baixa o ZIP do GitHub com barra de progresso
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
+                total_size = int(response.getheader('Content-Length', 0))
+                downloaded = 0
+                chunk_size = 16384
+                
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    out_file.write(chunk)
+                    downloaded += len(chunk)
+                    
+                    down_mb = downloaded / (1024 * 1024)
+                    tot_mb = total_size / (1024 * 1024)
+                    pct = int((downloaded / total_size) * 100) if total_size > 0 else 0
+                    
+                    root.after(0, update_gui, pct, down_mb, tot_mb)
+                    
+            root.after(0, lambda: lbl_status.config(text="Extraindo arquivos..."))
+            
+            # 2. Extrai silenciosamente para a pasta temporária
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
                 
             # 3. Cria um arquivo .bat que fecha o software, troca os arquivos e o reinicia automaticamente
             bat_path = os.path.join(temp_dir, "atualizar.bat")
             current_dir = os.getcwd()
+            exe_name = os.path.basename(sys.executable)
             
             bat_content = f"""@echo off
+:: Solicita privilegios de administrador caso seja necessario (Resolve C:\\Program Files)
+net session >nul 2>&1
+if %errorLevel% neq 0 (
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
+)
+
 echo Atualizando o Sistema Sistec... Por favor, aguarde a tela preta fechar sozinha.
-timeout /t 3 /nobreak > NUL
+timeout /t 2 /nobreak > NUL
+taskkill /F /IM "{exe_name}" > NUL 2>&1
 xcopy /s /y /q "{extract_dir}\\*" "{current_dir}\\"
-start "" "{current_dir}\\Importador_Sistec.exe"
+start "" /D "{current_dir}" "{current_dir}\\Importador_Sistec.exe"
 del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             
+            # --- REGISTRO DE HISTÓRICO DE ATUALIZAÇÃO ---
+            log_path = os.path.join(current_dir, "historico_atualizacoes.log")
+            try:
+                data_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(log_path, "a", encoding="utf-8") as f_log:
+                    f_log.write(f"[{data_hora}] Atualização aplicada: da versão v{VERSAO} para v{versao_nova}\n")
+            except Exception as e:
+                print(f"Aviso: Não foi possível gravar o log de atualização: {e}")
+
             # Dispara o BAT fora do Python e desliga a aplicação atual (liberando os arquivos para serem substituídos)
-            subprocess.Popen([bat_path], shell=True)
-            root.after(0, root.quit)
+            if os.name == 'nt':
+                subprocess.Popen(f'"{bat_path}"', shell=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            else:
+                subprocess.Popen(f'"{bat_path}"', shell=True)
+            
+            os._exit(0)
             
         except Exception as e:
             root.after(0, aviso.destroy)

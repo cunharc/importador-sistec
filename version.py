@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "3.0.0"
-DATA_VERSAO = "29/05/2026"
+VERSAO = "3.1.1"
+DATA_VERSAO = "02/06/2026"
 
 MODULOS = {
     "Plano de Contas": {
@@ -32,6 +32,10 @@ MODULOS = {
     "Reforma Tributária": {
         "status": "ajustes",
         "descricao": "CBS/IBS substituição"
+    },
+    "Busca de Logs": {
+        "status": "pronto",
+        "descricao": "Pesquisa avançada em arquivos de log ERP"
     }
 }
 

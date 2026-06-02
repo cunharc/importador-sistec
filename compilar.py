@@ -14,7 +14,15 @@ PyInstaller.__main__.run([
     '--add-data=sistec.jpg;.',
     '--add-data=Icone_plano.jpg;.',
     '--add-data=nfe_cli.jpg;.',
-    '--add-binary=fbclient_*.dll;.'
+    '--add-binary=fbclient_*.dll;.',
+    # Otimizações: Exclui módulos pesados que não são usados no seu sistema
+    '--exclude-module=matplotlib',
+    '--exclude-module=numpy',
+    '--exclude-module=scipy',
+    '--exclude-module=pandas',
+    '--exclude-module=PyQt5',
+    '--exclude-module=tkinter.test',
+    '--exclude-module=unittest'
 ])
 
 
