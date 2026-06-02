@@ -835,6 +835,14 @@ class TelaNcm(ttk.Frame):
             self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
+    def _get_icms_tax_key(self, item):
+        """Gera chave única de tributação ICMS para sub-agrupamento."""
+        icms_cst = str(item.get('icms_cst', '')).strip() or '00'
+        p_icms = str(item.get('p_icms', '0')).strip()
+        p_red_bc = str(item.get('p_red_bc', '0')).strip()
+        c_benef = str(item.get('c_benef', '')).strip()
+        return f"{icms_cst}|{p_icms}|{p_red_bc}|{c_benef}"
+
     def _agrupar_ncm(self, itens):
         mapa = {}
         for i in itens:
@@ -847,44 +855,51 @@ class TelaNcm(ttk.Frame):
 
         dados_agrupados = []
         for ncm, itens_grupo in mapa.items():
-            
-            def get_distinct_gcred(itens, chave):
-                valores = set()
-                for item in itens:
-                    gcreds = item.get('cred_presumidos', [])
-                    if gcreds:
-                        valores.add(str(gcreds[0].get(chave, '')))
-                if not valores: return "-"
-                if len(valores) == 1: return list(valores)[0]
-                return "*VÁRIOS*"
+            sub_map = {}
+            for item in itens_grupo:
+                tax_key = self._get_icms_tax_key(item)
+                if tax_key not in sub_map:
+                    sub_map[tax_key] = []
+                sub_map[tax_key].append(item)
 
-            grupo = {
-                'ncm': ncm,
-                'descricao': self._get_distinct_from_list(itens_grupo, 'x_prod'),
-                'uf_dest': self._get_distinct_from_list(itens_grupo, 'uf_dest'),
-                'cfop': self._get_distinct_from_list(itens_grupo, 'cfop'),
-                'tipo_cliente': self._get_distinct_from_list(itens_grupo, 'tipo_cliente'),
-                'ocorrencias': len(itens_grupo),
-                'c_benef': self._get_distinct_from_list(itens_grupo, 'c_benef'),
-                'c_cred': get_distinct_gcred(itens_grupo, 'c_cred'),
-                'p_cred': get_distinct_gcred(itens_grupo, 'p_cred'),
-                'icms_cst': self._get_distinct_from_list(itens_grupo, 'icms_cst'),
-                'p_icms': self._get_distinct_from_list(itens_grupo, 'p_icms'),
-                'p_red_bc': self._get_distinct_from_list(itens_grupo, 'p_red_bc'),
-                'p_fcp': self._get_distinct_from_list(itens_grupo, 'p_fcp'),
-                'p_icmsst': self._get_distinct_from_list(itens_grupo, 'p_icmsst'),
-                'p_mvast': self._get_distinct_from_list(itens_grupo, 'p_mvast'),
-                'pis_cst': self._get_distinct_from_list(itens_grupo, 'pis_cst'),
-                'pis_alq': self._get_distinct_from_list(itens_grupo, 'p_pis'),
-                'cofins_cst': self._get_distinct_from_list(itens_grupo, 'cofins_cst'),
-                'cofins_alq': self._get_distinct_from_list(itens_grupo, 'p_cofins'),
-                'c_class_trib': self._get_distinct_from_list(itens_grupo, 'c_class_trib'),
-                'ibscbs_cst': self._get_distinct_from_list(itens_grupo, 'ibscbs_cst'),
-                'p_ibs_uf': self._get_distinct_from_list(itens_grupo, 'p_ibs_uf'),
-                'p_cbs': self._get_distinct_from_list(itens_grupo, 'p_cbs'),
-                'itens_originais': itens_grupo
-            }
-            dados_agrupados.append(grupo)
+            for tax_key, sub_itens in sub_map.items():
+                def get_distinct_gcred(itens, chave):
+                    valores = set()
+                    for item in itens:
+                        gcreds = item.get('cred_presumidos', [])
+                        if gcreds:
+                            valores.add(str(gcreds[0].get(chave, '')))
+                    if not valores: return "-"
+                    if len(valores) == 1: return list(valores)[0]
+                    return "*VÁRIOS*"
+
+                grupo = {
+                    'ncm': ncm,
+                    'descricao': self._get_distinct_from_list(sub_itens, 'x_prod'),
+                    'uf_dest': self._get_distinct_from_list(sub_itens, 'uf_dest'),
+                    'cfop': self._get_distinct_from_list(sub_itens, 'cfop'),
+                    'tipo_cliente': self._get_distinct_from_list(sub_itens, 'tipo_cliente'),
+                    'ocorrencias': len(sub_itens),
+                    'c_benef': self._get_distinct_from_list(sub_itens, 'c_benef'),
+                    'c_cred': get_distinct_gcred(sub_itens, 'c_cred'),
+                    'p_cred': get_distinct_gcred(sub_itens, 'p_cred'),
+                    'icms_cst': self._get_distinct_from_list(sub_itens, 'icms_cst'),
+                    'p_icms': self._get_distinct_from_list(sub_itens, 'p_icms'),
+                    'p_red_bc': self._get_distinct_from_list(sub_itens, 'p_red_bc'),
+                    'p_fcp': self._get_distinct_from_list(sub_itens, 'p_fcp'),
+                    'p_icmsst': self._get_distinct_from_list(sub_itens, 'p_icmsst'),
+                    'p_mvast': self._get_distinct_from_list(sub_itens, 'p_mvast'),
+                    'pis_cst': self._get_distinct_from_list(sub_itens, 'pis_cst'),
+                    'pis_alq': self._get_distinct_from_list(sub_itens, 'p_pis'),
+                    'cofins_cst': self._get_distinct_from_list(sub_itens, 'cofins_cst'),
+                    'cofins_alq': self._get_distinct_from_list(sub_itens, 'p_cofins'),
+                    'c_class_trib': self._get_distinct_from_list(sub_itens, 'c_class_trib'),
+                    'ibscbs_cst': self._get_distinct_from_list(sub_itens, 'ibscbs_cst'),
+                    'p_ibs_uf': self._get_distinct_from_list(sub_itens, 'p_ibs_uf'),
+                    'p_cbs': self._get_distinct_from_list(sub_itens, 'p_cbs'),
+                    'itens_originais': sub_itens
+                }
+                dados_agrupados.append(grupo)
         return dados_agrupados
 
     def _renderizar_resultados(self, valores_tree):

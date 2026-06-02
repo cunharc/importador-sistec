@@ -434,6 +434,14 @@ class BuscaLogsWindow(tk.Toplevel):
         self.fila_busca = queue.Queue()
         self.thread_busca = None
         self.config_app = carregar_config()
+        self._sort_column = None
+        self._sort_reverse = False
+        self._col_headers = {
+            "Modulo": "Módulo/Tela",
+            "Nome do Arquivo": "Nome do Arquivo",
+            "Data do Arquivo": "Data do Arquivo",
+            "Ocorrências": "Qtd. Ocorrências",
+        }
         
         # Configurar ícone do projeto caso exista
         try:
@@ -493,10 +501,20 @@ class BuscaLogsWindow(tk.Toplevel):
         
         frame_busca.columnconfigure(1, weight=1)
         
+        # --- PAINEL DE PROGRESSO ---
+        frame_progresso = ttk.LabelFrame(self, text="Progresso da Busca", padding=5)
+        frame_progresso.pack(fill=tk.X, padx=10, pady=(0, 0))
+        
+        self.lbl_progresso = ttk.Label(frame_progresso, text="Aguardando...")
+        self.lbl_progresso.pack(anchor=tk.W, padx=5)
+        
+        self.progresso = ttk.Progressbar(frame_progresso, mode='determinate')
+        self.progresso.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
         # --- TOPO (maximize/minimize) ---
-        frame_topo = ttk.Frame(self)
-        frame_topo.pack(fill=tk.X, padx=10, pady=(5, 0))
-        self.btn_maximizar = ttk.Button(frame_topo, text="⛶ Maximizar", command=self._toggle_maximizar)
+        self.frame_topo = ttk.Frame(self)
+        self.frame_topo.pack(fill=tk.X, padx=10, pady=(5, 0))
+        self.btn_maximizar = ttk.Button(self.frame_topo, text="⛶ Maximizar", command=self._toggle_maximizar)
         self.btn_maximizar.pack(side=tk.LEFT)
         self.bind("<F11>", lambda e: self._toggle_maximizar())
         
@@ -505,16 +523,18 @@ class BuscaLogsWindow(tk.Toplevel):
         pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # 1. LISTA DE ARQUIVOS
-        frame_lista = ttk.LabelFrame(pane, text="Arquivos Encontrados (Clique para ver detalhes, Duplo-clique para abrir o arquivo)", padding=5)
+        frame_lista = ttk.LabelFrame(pane, text="Arquivos Encontrados (Ctrl+click para selecionar múltiplos, Clique p/ detalhes, Duplo-clique p/ abrir)", padding=5)
         pane.add(frame_lista, weight=1)
         
-        colunas = ("Nome do Arquivo", "Data do Arquivo", "Ocorrências")
-        self.tree = ttk.Treeview(frame_lista, columns=colunas, show="headings")
-        self.tree.heading("Nome do Arquivo", text="Nome do Arquivo")
-        self.tree.column("Nome do Arquivo", width=350, anchor=tk.W, minwidth=150, stretch=True)
-        self.tree.heading("Data do Arquivo", text="Data do Arquivo")
+        colunas = ("Modulo", "Nome do Arquivo", "Data do Arquivo", "Ocorrências")
+        self.tree = ttk.Treeview(frame_lista, columns=colunas, show="headings", selectmode="extended")
+        self.tree.heading("Modulo", text="Módulo/Tela", command=lambda: self._ordenar_por_coluna("Modulo"))
+        self.tree.column("Modulo", width=150, anchor=tk.W, minwidth=80, stretch=True)
+        self.tree.heading("Nome do Arquivo", text="Nome do Arquivo", command=lambda: self._ordenar_por_coluna("Nome do Arquivo"))
+        self.tree.column("Nome do Arquivo", width=300, anchor=tk.W, minwidth=150, stretch=True)
+        self.tree.heading("Data do Arquivo", text="Data do Arquivo", command=lambda: self._ordenar_por_coluna("Data do Arquivo"))
         self.tree.column("Data do Arquivo", width=120, anchor=tk.CENTER, minwidth=80, stretch=True)
-        self.tree.heading("Ocorrências", text="Qtd. Ocorrências")
+        self.tree.heading("Ocorrências", text="Qtd. Ocorrências", command=lambda: self._ordenar_por_coluna("Ocorrências"))
         self.tree.column("Ocorrências", width=100, anchor=tk.CENTER, minwidth=60, stretch=True)
         
         scroll_tree_y = ttk.Scrollbar(frame_lista, orient=tk.VERTICAL, command=self.tree.yview)
@@ -564,8 +584,6 @@ class BuscaLogsWindow(tk.Toplevel):
         
         self.lbl_status = ttk.Label(frame_status, text="Aguardando...")
         self.lbl_status.pack(side=tk.RIGHT)
-        self.progresso = ttk.Progressbar(frame_status, mode='determinate', length=200)
-        self.progresso.pack(side=tk.RIGHT, padx=10)
 
     def _configurar_tags_texto(self):
         self.txt_detalhes.tag_configure("header", foreground="#2C3E50", font=("Consolas", 10, "bold"))
@@ -623,8 +641,13 @@ class BuscaLogsWindow(tk.Toplevel):
         self.txt_detalhes.config(state=tk.DISABLED)
         
         self.resultados = {}
+        self._sort_column = None
+        self._sort_reverse = False
+        for cid, base in self._col_headers.items():
+            self.tree.heading(cid, text=base)
         self.btn_exportar.config(state=tk.DISABLED)
         self.progresso['value'] = 0
+        self.lbl_progresso.config(text="Aguardando...")
         self.config(cursor="wait")
         
         subpastas = self.var_subpastas.get()
@@ -644,9 +667,13 @@ class BuscaLogsWindow(tk.Toplevel):
                 msg = self.fila_busca.get_nowait()
                 
                 if msg['tipo'] == 'progresso':
-                    self.progresso['maximum'] = msg['total']
-                    self.progresso['value'] = msg['atual']
-                    self.lbl_status.config(text=f"Processando arquivos... {msg['atual']} de {msg['total']}")
+                    total = msg['total']
+                    atual = msg['atual']
+                    pct = (atual / total * 100) if total > 0 else 0
+                    self.progresso['maximum'] = total
+                    self.progresso['value'] = atual
+                    self.lbl_progresso.config(text=f"Lendo arquivos... {atual} de {total} ({pct:.0f}%)")
+                    self.lbl_status.config(text=f"Processando arquivos... {atual} de {total}")
                     
                 elif msg['tipo'] == 'erro':
                     print(f"Erro na thread de busca: {msg['msg']}")
@@ -669,39 +696,139 @@ class BuscaLogsWindow(tk.Toplevel):
         """Limpa as grids e variáveis da busca atual."""
         self.ent_termo.delete(0, tk.END)
         self.resultados = {}
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.txt_detalhes.config(state=tk.NORMAL)
-        self.txt_detalhes.delete(1.0, tk.END)
-        self.txt_detalhes.config(state=tk.DISABLED)
-        self.lbl_status.config(text="Aguardando...")
+        self._sort_column = None
+        self._sort_reverse = False
+        for cid, base in self._col_headers.items():
+            self.tree.heading(cid, text=base)
         self.btn_exportar.config(state=tk.DISABLED)
         self.btn_copiar.config(state=tk.DISABLED)
 
     def _exibir_resultados(self):
         total_arquivos = len(self.resultados)
         total_ocorrencias = sum(len(r['blocos']) for r in self.resultados.values())
-        
-        for fp, r in self.resultados.items():
-            self.tree.insert("", tk.END, values=(r['nome'], r['data_arquivo'], len(r['blocos'])), tags=(fp,))
-            
+        self._preencher_tree(self.resultados)
         self.lbl_status.config(text=f"Concluído: {total_arquivos} arquivo(s) com {total_ocorrencias} ocorrência(s).")
         if self.resultados:
             self.btn_exportar.config(state=tk.NORMAL)
 
+    def _modulos_por_arquivo(self, r):
+        mods = set()
+        for b in r['blocos']:
+            tela = b.get('tela', '').strip()
+            if tela:
+                mods.add(tela)
+        return ", ".join(sorted(mods))
+
+    def _preencher_tree(self, resultados):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        items = []
+        for fp, r in resultados.items():
+            mods_str = self._modulos_por_arquivo(r)
+            ocorr = len(r['blocos'])
+            items.append((mods_str, r['nome'], r['data_arquivo'], ocorr, fp))
+        
+        if self._sort_column:
+            col_idx = {"Modulo": 0, "Nome do Arquivo": 1, "Data do Arquivo": 2, "Ocorrências": 3}
+            idx = col_idx[self._sort_column]
+            
+            def sort_key(item):
+                val = item[idx]
+                if self._sort_column == "Ocorrências":
+                    return val
+                if self._sort_column == "Data do Arquivo":
+                    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
+                        try:
+                            return datetime.datetime.strptime(str(val), fmt)
+                        except (ValueError, TypeError):
+                            pass
+                    return datetime.datetime.min
+                return str(val).lower()
+            
+            items.sort(key=sort_key, reverse=self._sort_reverse)
+        
+        for mods_str, nome, data_arquivo, ocorr, fp in items:
+            self.tree.insert("", tk.END, values=(mods_str, nome, data_arquivo, ocorr), tags=(fp,))
+
+    def _ordenar_por_coluna(self, col):
+        if self._sort_column == col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = col
+            self._sort_reverse = False
+        
+        for cid, base in self._col_headers.items():
+            arrow = " ▼" if (cid == col and self._sort_reverse) else " ▲" if cid == col else ""
+            self.tree.heading(cid, text=base + arrow)
+        
+        self._preencher_tree(self.resultados)
+
+    def _sort_key_bloco(self, bloco):
+        data = bloco.get('data', '')
+        hora = bloco.get('hora', '')
+        if data and hora:
+            for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+                try:
+                    return datetime.datetime.strptime(f"{data} {hora}", fmt)
+                except ValueError:
+                    continue
+        return datetime.datetime.min
+
     def _on_tree_select(self, event):
         sel = self.tree.selection()
-        if not sel: return
-        
-        filepath = self.tree.item(sel[0], "tags")[0]
-        self._ultimo_filepath_selecionado = filepath
-        
-        if filepath in self.resultados:
-            self._mostrar_detalhes(self.resultados[filepath])
-            if os.path.exists(filepath):
-                self.btn_salvar_copia.config(state=tk.NORMAL)
-            else:
-                self.btn_salvar_copia.config(state=tk.DISABLED)
+        if not sel:
+            self.txt_detalhes.config(state=tk.NORMAL)
+            self.txt_detalhes.delete(1.0, tk.END)
+            self.txt_detalhes.config(state=tk.DISABLED)
+            self.btn_copiar.config(state=tk.DISABLED)
+            self.btn_salvar_copia.config(state=tk.DISABLED)
+            return
+
+        todos_blocos = []
+        nomes_arquivos = set()
+        tem_arquivo_existente = False
+
+        for item in sel:
+            filepath = self.tree.item(item, "tags")[0]
+            if filepath in self.resultados:
+                r = self.resultados[filepath]
+                for b in r['blocos']:
+                    bloco = dict(b)
+                    bloco['_nome_arquivo'] = r['nome']
+                    todos_blocos.append(bloco)
+                nomes_arquivos.add(r['nome'])
+                if os.path.exists(filepath):
+                    tem_arquivo_existente = True
+
+        if not todos_blocos:
+            self.txt_detalhes.config(state=tk.NORMAL)
+            self.txt_detalhes.delete(1.0, tk.END)
+            self.txt_detalhes.insert(tk.END, "Nenhum bloco encontrado para a seleção atual.\n", "info")
+            self.txt_detalhes.config(state=tk.DISABLED)
+            self.btn_copiar.config(state=tk.DISABLED)
+            self.btn_salvar_copia.config(state=tk.DISABLED)
+            return
+
+        todos_blocos.sort(key=self._sort_key_bloco)
+
+        if len(sel) == 1:
+            fp = self.tree.item(sel[0], "tags")[0]
+            self._ultimo_filepath_selecionado = fp
+        else:
+            self._ultimo_filepath_selecionado = None
+
+        merged = {
+            'nome': " | ".join(sorted(nomes_arquivos)),
+            'blocos': todos_blocos,
+            'multi_arquivo': len(sel) > 1
+        }
+        self._mostrar_detalhes(merged)
+
+        if tem_arquivo_existente and len(sel) == 1:
+            self.btn_salvar_copia.config(state=tk.NORMAL)
+        else:
+            self.btn_salvar_copia.config(state=tk.DISABLED)
 
     def _get_selected_filepath(self):
         sel = self.tree.selection()
@@ -726,7 +853,7 @@ class BuscaLogsWindow(tk.Toplevel):
         
         filepath = self.tree.item(sel[0], "tags")[0]
         
-        if os.path.exists(filepath):
+        if filepath in self.resultados and os.path.exists(filepath):
             try:
                 os.startfile(filepath)
             except Exception as e:
@@ -770,20 +897,25 @@ class BuscaLogsWindow(tk.Toplevel):
         datas = [f"{b['data']} {b['hora']}".strip() for b in blocos if b.get('data') or b.get('hora')]
         data_min = min(datas) if datas else ''
         data_max = max(datas) if datas else ''
-        periodo = f"{data_min} à(s) {data_max}" if data_min != data_max else data_min
+        periodo = f"{data_min} — {data_max}" if data_min != data_max else data_min
         
-        self.txt_detalhes.insert(tk.END, f"📄 Arquivo: {resultado['nome']}\n", "header")
+        if resultado.get('multi_arquivo'):
+            self.txt_detalhes.insert(tk.END, f"📂 Múltiplos Arquivos Selecionados\n", "header")
+        self.txt_detalhes.insert(tk.END, f"📄 Arquivo(s): {resultado['nome']}\n", "header")
         if periodo:
             self.txt_detalhes.insert(tk.END, f"📅 Período nos logs: {periodo}\n", "info")
-        self.txt_detalhes.insert(tk.END, f"📁 Modificado em: {resultado['data_arquivo']}\n", "info")
         self.txt_detalhes.insert(tk.END, f"🔎 Ocorrências: {ocorrencias}\n", "header")
         self.txt_detalhes.insert(tk.END, "━" * 60 + "\n\n", "separador")
         
-        for bloco in resultado['blocos']:
+        for bloco in blocos:
             tipo = bloco['tipo_operacao']
             bg_tag = ""
             if tipo in ["EXCLUSÃO", "CANCELAMENTO", "ESTORNO"]: bg_tag = "bg_exclusao"
             elif tipo == "INSERÇÃO": bg_tag = "bg_insercao"
+            
+            nome_arq = bloco.get('_nome_arquivo', '')
+            if nome_arq:
+                self.txt_detalhes.insert(tk.END, f"📄 Fonte: {nome_arq}\n", "info")
             
             self.txt_detalhes.insert(tk.END, f"🔧 Operação : ", "info")
             self.txt_detalhes.insert(tk.END, f"{tipo}\n", bg_tag if bg_tag else "header")
