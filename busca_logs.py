@@ -9,6 +9,48 @@ import json
 import sys
 from pathlib import Path
 
+MODULOS_FIXOS = [
+    "Abate - Pesagem", "Arvore de Privilegios", "Baixa Etiqueta",
+    "Baixa Titulo Classe", "Baixa por Nro de Documento",
+    "Cadastro D.I.A Pedido Compra Animal", "Cadastro Limite Pesos Cliente",
+    "Cadastro Lote", "Cadastro Modelo de Chassi",
+    "Cadastro Motivo Devolucao Nota Fiscal", "Cadastro Motivo Morte Animal",
+    "Cadastro Nota Fiscal Produtor", "Cadastro Ordem de Desossa Produto Acabado",
+    "Cadastro Pedido", "Cadastro Pedido Animal - Item",
+    "Cadastro Pedido Animal - Peso Morto", "Cadastro Pedido Animal - Peso Vivo",
+    "Cadastro Pedido Compra de Animal", "Cadastro Unidade Produto",
+    "Cadastro Vacina", "Cadastro de Adiantamento", "Cadastro de Animal",
+    "Cadastro de Bens", "Cadastro de Centro de Custos",
+    "Cadastro de Clientes-Fornecedores", "Cadastro de Compradores",
+    "Cadastro de Computadores", "Cadastro de Contas",
+    "Cadastro de Curral Confinamento", "Cadastro de Dieta",
+    "Cadastro de Etiquetas", "Cadastro de Filial",
+    "Cadastro de GTA Pedido de Compra", "Cadastro de Grupos",
+    "Cadastro de Locais de Estoque", "Cadastro de Local Confinamento",
+    "Cadastro de Meta Vendedor", "Cadastro de Motoristas",
+    "Cadastro de Movimento", "Cadastro de Notas de Entrada",
+    "Cadastro de Ordem de Carregamento", "Cadastro de Pedidos",
+    "Cadastro de Plano de Contas", "Cadastro de Produto",
+    "Cadastro de Produtos", "Cadastro de Produtos Gerado via Classe",
+    "Cadastro de Saldos Anteriores", "Cadastro de Solicitantes",
+    "Cadastro de Subgrupos", "Cadastro de Tipo de Lancamento",
+    "Cadastro de Tipo de Produto", "Cadastro de Transportadoras",
+    "Cadastro de Vendedores-Representantes", "Calculo Saldo Conta",
+    "Cancelamento de Nota Fiscal", "Cancelamento de Pedidos",
+    "Cancelar Nota Fiscal de Entrada", "Compensar Cheques Manual",
+    "Complemento da Filial", "Consulta de CNPJ", "Encerrar Movimento",
+    "Entrada da Desossa", "ManifestaNFE - Recupera NF",
+    "Montagem de Ordem de Carregamento", "Movimento Concor Classe",
+    "Movimento Concor Classe - Centro de Custo", "Movimento Estoque Manual",
+    "Movimento de Estoque", "Notas Fiscais de Entrada de Ajustes do ICMS",
+    "PDA", "Paramametros da Filial - SPED ReInf",
+    "Parametros da Filial - Compras", "Parametros da Filial - Conpag",
+    "Parametros da filial - Conrec", "Parametros de Pedidos de Varejo",
+    "Pedido de Venda - Varejo", "Pedido de Venda Gerado via Classe",
+    "Pesagem de Desossa", "Recalcula Impostos - PIS-COFINS",
+    "Recalculo do Estoque", "Recebimento Animal", "Recebimento de Mercadoria",
+]
+
 # Configuração para salvar a última pasta buscada
 CONFIG_FILE = "config_busca_logs.json"
 
@@ -442,6 +484,8 @@ class BuscaLogsWindow(tk.Toplevel):
             "Data do Arquivo": "Data do Arquivo",
             "Ocorrências": "Qtd. Ocorrências",
         }
+        self._filtro_modulo = ""
+        self._resultados_raw = {}
         
         # Configurar ícone do projeto caso exista
         try:
@@ -500,6 +544,20 @@ class BuscaLogsWindow(tk.Toplevel):
         ttk.Checkbutton(frame_chk, text="Ignorar maiúsculas/minúsculas (Case-insensitive)", variable=self.var_case).pack(side=tk.LEFT)
         
         frame_busca.columnconfigure(1, weight=1)
+        
+        # --- FILTRO POR MÓDULO ---
+        frame_modulo = ttk.Frame(frame_busca)
+        frame_modulo.grid(row=3, column=0, columnspan=3, sticky=tk.EW, padx=5, pady=(0, 5))
+        
+        ttk.Label(frame_modulo, text="Filtrar por módulo:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.var_modulo = tk.StringVar()
+        self.cb_modulo = ttk.Combobox(frame_modulo, textvariable=self.var_modulo, width=40, state="readonly")
+        self.cb_modulo['values'] = ["Todos os módulos"] + MODULOS_FIXOS
+        self.var_modulo.set("Todos os módulos")
+        self.cb_modulo.pack(side=tk.LEFT, padx=(0, 5))
+        self.cb_modulo.bind("<<ComboboxSelected>>", self._on_modulo_selected)
+        ttk.Button(frame_modulo, text="Múltiplos...", command=self._abrir_popup_modulos).pack(side=tk.LEFT, padx=2)
         
         # --- PAINEL DE PROGRESSO ---
         frame_progresso = ttk.LabelFrame(self, text="Progresso da Busca", padding=5)
@@ -625,6 +683,9 @@ class BuscaLogsWindow(tk.Toplevel):
             salvar_config(self.config_app)
 
     def _iniciar_busca(self):
+        self._resultados_raw = {}
+        self._filtro_modulos = []
+        self.var_modulo.set("Todos os módulos")
         pasta = self.ent_pasta.get().strip()
         termo = self.ent_termo.get().strip()
         
@@ -680,8 +741,9 @@ class BuscaLogsWindow(tk.Toplevel):
                     
                 elif msg['tipo'] == 'fim':
                     self.config(cursor="")
-                    self.resultados = msg['resultados']
-                    self._exibir_resultados()
+                    self._resultados_raw = msg['resultados']
+                    self._popular_modulos_filtro(self._resultados_raw)
+                    self._aplicar_filtro_modulo()
                     self.progresso['value'] = 0
                     return
         except queue.Empty:
@@ -696,8 +758,12 @@ class BuscaLogsWindow(tk.Toplevel):
         """Limpa as grids e variáveis da busca atual."""
         self.ent_termo.delete(0, tk.END)
         self.resultados = {}
+        self._resultados_raw = {}
+        self._filtro_modulos = []
         self._sort_column = None
         self._sort_reverse = False
+        self.cb_modulo['values'] = ["Todos os módulos"] + MODULOS_FIXOS
+        self.var_modulo.set("Todos os módulos")
         for cid, base in self._col_headers.items():
             self.tree.heading(cid, text=base)
         self.btn_exportar.config(state=tk.DISABLED)
@@ -1020,6 +1086,94 @@ class BuscaLogsWindow(tk.Toplevel):
                 messagebox.showinfo("Sucesso", "Resultados exportados com sucesso.")
             else:
                 messagebox.showerror("Erro", "Erro ao exportar os resultados.")
+
+    # ---- Filtro por módulo ----
+    def _popular_modulos_filtro(self, resultados):
+        modulos = set(MODULOS_FIXOS)
+        for r in resultados.values():
+            for b in r['blocos']:
+                tela = b.get('tela', '').strip()
+                if tela and tela not in ("Operação Desconhecida", "Operação", ""):
+                    modulos.add(tela)
+        self._modulos_disponiveis = sorted(modulos)
+        self.cb_modulo['values'] = ["Todos os módulos"] + self._modulos_disponiveis
+        if len(self._filtro_modulos) == 1 and self._filtro_modulos[0] in modulos:
+            self.var_modulo.set(self._filtro_modulos[0])
+        elif len(self._filtro_modulos) > 1:
+            self.var_modulo.set(f"Múltiplos ({len(self._filtro_modulos)})")
+        else:
+            self._filtro_modulos = []
+            self.var_modulo.set("Todos os módulos")
+
+    def _on_modulo_selected(self, event=None):
+        val = self.var_modulo.get()
+        self._filtro_modulos = [] if val == "Todos os módulos" else [val]
+        self._aplicar_filtro_modulo()
+
+    def _abrir_popup_modulos(self):
+        if not hasattr(self, '_modulos_disponiveis') or not self._modulos_disponiveis:
+            messagebox.showinfo("Aviso", "Faça uma busca primeiro para carregar os módulos disponíveis.", parent=self)
+            return
+        win = tk.Toplevel(self)
+        win.title("Selecionar Módulos")
+        win.geometry("450x500")
+        win.transient(self)
+        win.grab_set()
+
+        ttk.Label(win, text="Selecione os módulos desejados:", font=("", 10, "bold")).pack(anchor=tk.W, padx=10, pady=10)
+
+        outer = ttk.Frame(win)
+        outer.pack(fill=tk.BOTH, expand=True, padx=10)
+
+        canvas = tk.Canvas(outer, highlightthickness=0, bg="#FFFFFF")
+        scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable = ttk.Frame(canvas)
+
+        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor=tk.NW)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        vars_modulos = {}
+        for mod in self._modulos_disponiveis:
+            var = tk.BooleanVar(value=mod in self._filtro_modulos)
+            ttk.Checkbutton(scrollable, text=mod, variable=var).pack(anchor=tk.W, padx=15, pady=2)
+            vars_modulos[mod] = var
+
+        def aplicar():
+            self._filtro_modulos = sorted(m for m, v in vars_modulos.items() if v.get())
+            if len(self._filtro_modulos) == 1:
+                self.var_modulo.set(self._filtro_modulos[0])
+            elif self._filtro_modulos:
+                self.var_modulo.set(f"Múltiplos ({len(self._filtro_modulos)})")
+            else:
+                self.var_modulo.set("Todos os módulos")
+            self._aplicar_filtro_modulo()
+            win.destroy()
+
+        btn_frame = ttk.Frame(win, padding=10)
+        btn_frame.pack(fill=tk.X)
+        ttk.Button(btn_frame, text="Aplicar", command=aplicar).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancelar", command=win.destroy).pack(side=tk.RIGHT, padx=5)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _aplicar_filtro_modulo(self):
+        if not self._resultados_raw:
+            return
+        if not self._filtro_modulos:
+            self.resultados = self._resultados_raw
+        else:
+            filtrados = {}
+            for fp, r in self._resultados_raw.items():
+                blocos_filtrados = [b for b in r['blocos'] if b.get('tela', '').strip() in self._filtro_modulos]
+                if blocos_filtrados:
+                    r_filtrado = dict(r)
+                    r_filtrado['blocos'] = blocos_filtrados
+                    filtrados[fp] = r_filtrado
+            self.resultados = filtrados
+        self._exibir_resultados()
+
 
 if __name__ == '__main__':
     root = tk.Tk()

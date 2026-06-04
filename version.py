@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "3.1.3"
-DATA_VERSAO = "02/06/2026"
+VERSAO = "3.2.1"
+DATA_VERSAO = "04/06/2026"
 
 MODULOS = {
     "Plano de Contas": {

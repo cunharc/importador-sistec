@@ -9,6 +9,10 @@ import sys
 from PIL import Image, ImageTk
 from tkinter import ttk
 from telas.tela_inicial import TelaInicial
+from utils.logger import get_logger
+from version import VERSAO, DATA_VERSAO
+
+_log = get_logger('main')
 
 def resource_path(relative_path):
     """Obtém o caminho absoluto para os recursos, funcionando no dev e no PyInstaller"""
@@ -91,7 +95,7 @@ if __name__ == '__main__':
             lbl_img = tk.Label(splash, image=splash_img, bg="white")
             lbl_img.pack(expand=True)
         except Exception as e:
-            print(f"Aviso: Não foi possível carregar o logo da splash screen: {e}")
+            _log.warning(f"Não foi possível carregar o logo da splash screen: {e}")
             
     lbl_texto = tk.Label(splash, text="Carregando Implantação Sistec...", font=("Arial", 10), bg="white")
     lbl_texto.pack(side=tk.BOTTOM, pady=10)
@@ -99,7 +103,7 @@ if __name__ == '__main__':
     splash.update() # Força a tela a aparecer imediatamente
     
     # --- CONFIGURAÇÃO DA JANELA PRINCIPAL ---
-    root.title("Implantação Sistec")
+    root.title(f"Implantação Sistec v{VERSAO}")
     
     # Força a janela a abrir sempre maximizada
     try:
