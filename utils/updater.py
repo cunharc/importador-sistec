@@ -12,6 +12,9 @@ from tkinter import messagebox, ttk
 from datetime import datetime
 import shutil
 from version import VERSAO
+from utils.logger import get_logger
+
+_log = get_logger('updater')
 
 # IMPORTANTE: Coloque o seu usuário e repositório oficial do GitHub (precisa ser um repositório Público)
 # Exemplo: "RafaelCunha/importador-sistec"
@@ -206,7 +209,7 @@ del "%~f0"
                 with open(log_path, "a", encoding="utf-8") as f_log:
                     f_log.write(f"[{data_hora}] Atualização aplicada: da versão v{VERSAO} para v{versao_nova}\n")
             except Exception as e:
-                print(f"Aviso: Não foi possível gravar o log de atualização: {e}")
+                _log.warning(f"Aviso: Não foi possível gravar o log de atualização: {e}")
 
             # Dispara o BAT fora do Python e desliga a aplicação atual (liberando os arquivos para serem substituídos)
             if os.name == 'nt':

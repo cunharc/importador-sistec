@@ -4,6 +4,9 @@ import glob
 import configparser
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from utils.logger import get_logger
+
+_log = get_logger('xml_reader')
 
 def _get(element: ET.Element, tag: str) -> Optional[str]:
     """Tenta buscar a tag com e sem o namespace padrão da NF-e."""
@@ -334,24 +337,28 @@ def _extrair_dados_pagamento(inf_nfe, ns, dt_emi, v_nf):
     
     return dados_pagamento
 
-def ler_nfe(xml_path: str) -> List[Dict[str, Any]]:
-    """Lê um XML de NF-e e extrai os dados do Emitente e Destinatário para importação de Clientes/Fornecedores."""
+def _load_xml(xml_path: str):
+    """Carrega e parseia um XML de NF-e, retornando (root, inf_nfe, ns)."""
     try:
         with open(xml_path, 'r', encoding='utf-8') as f:
             xml_content = f.read()
     except UnicodeDecodeError:
         with open(xml_path, 'r', encoding='iso-8859-1') as f:
             xml_content = f.read()
-            
+
     xml_content = xml_content[xml_content.find('<'):]
     try:
         root = ET.fromstring(xml_content)
     except Exception:
-        return []
-        
+        return None, None, None
+
     ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
-    
     inf_nfe = root.find('.//nfe:infNFe', ns) or root.find('.//infNFe')
+    return root, inf_nfe, ns
+
+def ler_nfe(xml_path: str) -> List[Dict[str, Any]]:
+    """Lê um XML de NF-e e extrai os dados do Emitente e Destinatário para importação de Clientes/Fornecedores."""
+    root, inf_nfe, ns = _load_xml(xml_path)
     if inf_nfe is None:
         return []
 
@@ -446,24 +453,7 @@ def ler_nfe(xml_path: str) -> List[Dict[str, Any]]:
 
 def parse_nfe(xml_path: str) -> Dict[str, Any]:
     """Lê e processa um arquivo XML de NF-e, retornando chave, info complementar e itens."""
-    try:
-        with open(xml_path, 'r', encoding='utf-8') as f:
-            xml_content = f.read()
-    except UnicodeDecodeError:
-        with open(xml_path, 'r', encoding='iso-8859-1') as f:
-            xml_content = f.read()
-            
-    # Limpa possíveis sujeiras antes da tag root
-    xml_content = xml_content[xml_content.find('<'):]
-    
-    try:
-        root = ET.fromstring(xml_content)
-    except Exception:
-        return {'chave_nfe': '', 'inf_cpl': '', 'itens': []}
-        
-    ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
-    
-    inf_nfe = root.find('.//nfe:infNFe', ns) or root.find('.//infNFe')
+    root, inf_nfe, ns = _load_xml(xml_path)
     if inf_nfe is None:
         return {'chave_nfe': '', 'inf_cpl': '', 'itens': []}
         
@@ -520,11 +510,15 @@ def parse_nfe(xml_path: str) -> Dict[str, Any]:
         'itens': itens
     }
 
-def parse_nfe_folder(folder_path: str) -> List[Dict[str, Any]]:
+def parse_nfe_folder(folder_path: str, callback_progresso=None) -> List[Dict[str, Any]]:
     """Itera sobre todos os XMLs de uma pasta e retorna uma lista linear (achatada) de itens."""
     todos_itens = []
     pattern = os.path.join(folder_path, '**', '*.xml')
-    for xml_file in glob.glob(pattern, recursive=True):
+    xml_files = glob.glob(pattern, recursive=True)
+    total = len(xml_files)
+    for i, xml_file in enumerate(xml_files):
+        if callback_progresso:
+            callback_progresso(i + 1, total)
         try:
             nfe_data = parse_nfe(xml_file)
             if nfe_data and nfe_data.get('itens'):
@@ -533,6 +527,6 @@ def parse_nfe_folder(folder_path: str) -> List[Dict[str, Any]]:
                     item['inf_cpl'] = nfe_data['inf_cpl']
                     todos_itens.append(item)
         except Exception as e:
-            print(f"Erro ao processar o arquivo {xml_file}: {e}")
+            _log.warning(f"Erro ao processar o arquivo {xml_file}: {e}")
             
     return todos_itens

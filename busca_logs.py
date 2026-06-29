@@ -398,7 +398,7 @@ def parse_log_file(filepath: str, termo: str, case_insensitive: bool) -> list:
                 
     return blocos_encontrados
 
-def buscar_em_pasta(pasta: str, termo: str, subpastas: bool, case_insensitive: bool, q: queue.Queue):
+def buscar_em_pasta(pasta: str, termo: str, subpastas: bool, case_insensitive: bool, q: queue.Queue, modulos_filtro: list = None):
     """Função background que faz o crawling nas pastas sem travar a interface."""
     resultados = {}
     total_arquivos = 0
@@ -411,7 +411,18 @@ def buscar_em_pasta(pasta: str, termo: str, subpastas: bool, case_insensitive: b
         total_arquivos = len(arquivos)
         
         for i, filepath in enumerate(arquivos):
-            blocos = parse_log_file(str(filepath), termo, case_insensitive)
+            # Pré-filtro: pula arquivos que não contenham o módulo selecionado
+            if modulos_filtro:
+                try:
+                    texto = filepath.read_text(encoding='utf-8', errors='ignore')
+                except Exception:
+                    continue
+                if not any(m in texto for m in modulos_filtro):
+                    blocos = None
+                else:
+                    blocos = parse_log_file(str(filepath), termo, case_insensitive)
+            else:
+                blocos = parse_log_file(str(filepath), termo, case_insensitive)
             if blocos:
                 mtime = os.path.getmtime(filepath)
                 data_arquivo = datetime.datetime.fromtimestamp(mtime).strftime('%d/%m/%Y %H:%M')
@@ -484,7 +495,7 @@ class BuscaLogsWindow(tk.Toplevel):
             "Data do Arquivo": "Data do Arquivo",
             "Ocorrências": "Qtd. Ocorrências",
         }
-        self._filtro_modulo = ""
+        self._filtro_modulos = []
         self._resultados_raw = {}
         
         # Configurar ícone do projeto caso exista
@@ -684,8 +695,6 @@ class BuscaLogsWindow(tk.Toplevel):
 
     def _iniciar_busca(self):
         self._resultados_raw = {}
-        self._filtro_modulos = []
-        self.var_modulo.set("Todos os módulos")
         pasta = self.ent_pasta.get().strip()
         termo = self.ent_termo.get().strip()
         
@@ -714,9 +723,10 @@ class BuscaLogsWindow(tk.Toplevel):
         subpastas = self.var_subpastas.get()
         case_insensitive = self.var_case.get()
         
+        modulos_busca = self._filtro_modulos if self._filtro_modulos else None
         self.thread_busca = threading.Thread(
             target=buscar_em_pasta, 
-            args=(pasta, termo, subpastas, case_insensitive, self.fila_busca), 
+            args=(pasta, termo, subpastas, case_insensitive, self.fila_busca, modulos_busca), 
             daemon=True
         )
         self.thread_busca.start()
@@ -767,6 +777,7 @@ class BuscaLogsWindow(tk.Toplevel):
         for cid, base in self._col_headers.items():
             self.tree.heading(cid, text=base)
         self.btn_exportar.config(state=tk.DISABLED)
+        self.btn_exportar_csv.config(state=tk.DISABLED)
         self.btn_copiar.config(state=tk.DISABLED)
 
     def _exibir_resultados(self):
@@ -776,6 +787,7 @@ class BuscaLogsWindow(tk.Toplevel):
         self.lbl_status.config(text=f"Concluído: {total_arquivos} arquivo(s) com {total_ocorrencias} ocorrência(s).")
         if self.resultados:
             self.btn_exportar.config(state=tk.NORMAL)
+            self.btn_exportar_csv.config(state=tk.NORMAL)
 
     def _modulos_por_arquivo(self, r):
         mods = set()
@@ -942,6 +954,11 @@ class BuscaLogsWindow(tk.Toplevel):
             try:
                 shutil.copy2(filepath, destino)
                 messagebox.showinfo("Sucesso", f"Cópia salva em:\n{destino}", parent=self)
+                if messagebox.askyesno("Abrir Log", "Deseja abrir o arquivo de log agora?", parent=self):
+                    try:
+                        os.startfile(destino)
+                    except Exception as e:
+                        messagebox.showerror("Erro", f"Erro ao abrir arquivo:\n{e}", parent=self)
             except Exception as e:
                 messagebox.showerror("Erro", f"Não foi possível copiar o arquivo:\n{e}", parent=self)
 
@@ -1084,6 +1101,12 @@ class BuscaLogsWindow(tk.Toplevel):
         if filepath:
             if exportar_resultados(self.resultados, filepath):
                 messagebox.showinfo("Sucesso", "Resultados exportados com sucesso.")
+                if messagebox.askyesno("Abrir Log", "Deseja abrir o arquivo de log agora?", parent=self):
+                    try:
+                        filepath = os.path.normpath(filepath)
+                        os.startfile(filepath)
+                    except Exception as e:
+                        messagebox.showerror("Erro", f"Erro ao abrir arquivo:\n{e}", parent=self)
             else:
                 messagebox.showerror("Erro", "Erro ao exportar os resultados.")
 

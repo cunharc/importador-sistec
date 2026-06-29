@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "3.2.1"
-DATA_VERSAO = "04/06/2026"
+VERSAO = "4.1"
+DATA_VERSAO = "29/06/2026"
 
 MODULOS = {
     "Plano de Contas": {
@@ -36,6 +36,46 @@ MODULOS = {
     "Busca de Logs": {
         "status": "pronto",
         "descricao": "Pesquisa avançada em arquivos de log ERP"
+    },
+    "Importação Clientes Planilha": {
+        "status": "pronto",
+        "descricao": "Importação de clientes via planilha Excel/CSV"
+    },
+    "Clientes NF-e": {
+        "status": "pronto",
+        "descricao": "Importação de clientes e fornecedores via XML NF-e"
+    },
+    "Importação Produtos Planilha": {
+        "status": "pronto",
+        "descricao": "Importação de produtos via planilha Excel/CSV"
+    },
+    "Importação Receber": {
+        "status": "pronto",
+        "descricao": "Importação de contas a receber via planilha"
+    },
+    "Importação Pagar": {
+        "status": "pronto",
+        "descricao": "Importação de contas a pagar via planilha"
+    },
+    "Importação Lista Preços": {
+        "status": "ajustes",
+        "descricao": "Importação de lista de preços via planilha"
+    },
+    "Lista de Preços XML": {
+        "status": "ajustes",
+        "descricao": "Criação de lista de preços a partir de XMLs NF-e"
+    },
+    "Importação Tributação": {
+        "status": "ajustes",
+        "descricao": "Importação de tributação NCM via planilha com criação de faixas ICMS e regras RT"
+    },
+    "Auditoria Geral": {
+        "status": "pronto",
+        "descricao": "Auditoria tributária gerencial NF-e"
+    },
+    "Auditoria por Produto": {
+        "status": "pronto",
+        "descricao": "Auditoria tributária por produto"
     }
 }
 

@@ -457,6 +457,12 @@ class TelaImportacao(ttk.Frame):
                 with open(caminho, 'w', encoding='utf-8') as f:
                     for r in registros:
                         f.write(f"CONTA: {r['PLANO_CONTA']} | DESC: {r['PLANO_DESCRICAO']} | STATUS: Importado\n")
+                messagebox.showinfo("Log Salvo", f"Arquivo salvo em:\n{caminho}")
+                if messagebox.askyesno("Abrir Log", "Deseja abrir o arquivo de log agora?"):
+                    try:
+                        os.startfile(caminho)
+                    except Exception as e:
+                        messagebox.showerror("Erro", f"Erro ao abrir arquivo:\n{e}")
 
     def _restaurar_botoes(self):
         self.btn_cancelar.config(state=tk.DISABLED)

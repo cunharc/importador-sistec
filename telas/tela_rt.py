@@ -4,6 +4,7 @@ import configparser
 import threading
 import os
 import sys
+import logging
 
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
@@ -266,7 +267,10 @@ class DialogoRegrasRtExistentes(tk.Toplevel):
     def __init__(self, parent, fb_config):
         super().__init__(parent)
         self.title("Regras de Reforma Tributária Existentes no ERP")
-        self.geometry("800x500")
+        w = min(900, int(self.winfo_screenwidth() * 0.85))
+        h = min(650, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent)
         self.grab_set()
         
@@ -510,7 +514,7 @@ class TelaRt(ttk.Frame):
             if self.arquivos_selecionados:
                 for arq in self.arquivos_selecionados:
                     try: itens_xml.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 itens_xml = parse_nfe_folder(self.pasta_xmls)
 
@@ -530,7 +534,7 @@ class TelaRt(ttk.Frame):
                 
             self.parent.after(0, self._renderizar_resultados, mapa_agrupado)
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _agrupar_rt(self, itens):

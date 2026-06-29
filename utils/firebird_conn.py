@@ -7,6 +7,9 @@ import configparser
 import os
 import re
 import sys
+from utils.logger import get_logger
+
+_log = get_logger('firebird_conn')
 
 def carregar_config():
     config = configparser.ConfigParser()
@@ -138,7 +141,7 @@ def inserir_registros(conn, registros: list, callback_progresso=None, checar_can
                     inseridos += 1
                 except Exception as e:
                     erros += 1
-                    print(f"Erro ao inserir conta {reg['PLANO_CONTA']}: {e}")
+                    _log.error(f"Erro ao inserir conta {reg['PLANO_CONTA']}: {e}")
                     
             if callback_progresso:
                 callback_progresso(i + 1, total)
@@ -148,6 +151,76 @@ def inserir_registros(conn, registros: list, callback_progresso=None, checar_can
     except Exception as e:
         conn.rollback()
         raise e
+
+
+# =============================================================================
+# FUNÇÕES DO MÓDULO DE IMPORTAÇÃO DE CLIENTES VIA PLANILHA
+# =============================================================================
+
+def buscar_vendedor_por_nome(conn, empresa, filial, nome):
+    """Busca vendedor pelo nome exato. Retorna o código ou None."""
+    if not nome or not str(nome).strip():
+        return None
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT VEND_CODIGO FROM TABELA_VENDEDOR "
+        "WHERE VEND_EMPRESA = ? AND VEND_FILIAL = ? AND TRIM(UPPER(VEND_NOME)) = ?",
+        (empresa, filial, str(nome).strip().upper())
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def buscar_ou_criar_vendedor(conn, empresa, filial, nome):
+    """Busca vendedor pelo nome. Se não existir, cria com código sequencial."""
+    codigo = buscar_vendedor_por_nome(conn, empresa, filial, nome)
+    if codigo:
+        return codigo
+    if not nome or not str(nome).strip():
+        return None
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COALESCE(MAX(VEND_CODIGO), 0) + 1 FROM TABELA_VENDEDOR "
+        "WHERE VEND_EMPRESA = ? AND VEND_FILIAL = ?",
+        (empresa, filial)
+    )
+    novo_codigo = cur.fetchone()[0]
+    cur.execute("""
+        INSERT INTO TABELA_VENDEDOR (
+            VEND_EMPRESA, VEND_FILIAL, VEND_CODIGO, VEND_NOME, VEND_ATIVO
+        ) VALUES (?, ?, ?, ?, 'S')
+    """, (empresa, filial, novo_codigo, str(nome).strip().upper()))
+    conn.commit()
+    return novo_codigo
+
+
+def buscar_cidade_por_nome(conn, empresa, filial, nome_cidade, uf=''):
+    """Busca cidade pelo nome e UF. Retorna o código CID_CODIGO ou None."""
+    if not nome_cidade or not str(nome_cidade).strip():
+        return None
+    cur = conn.cursor()
+    nome_upper = str(nome_cidade).strip().upper()
+    try:
+        if uf:
+            cur.execute(
+                "SELECT CID_CODIGO FROM TABELA_CIDADE "
+                "WHERE CID_EMPRESA = ? AND CID_FILIAL = ? "
+                "AND TRIM(UPPER(CID_DESCRICAO)) = ? AND CID_UF = ?",
+                (empresa, filial, nome_upper, uf.upper())
+            )
+            row = cur.fetchone()
+            if row: return row[0]
+        cur.execute(
+            "SELECT CID_CODIGO FROM TABELA_CIDADE "
+            "WHERE CID_EMPRESA = ? AND CID_FILIAL = ? "
+            "AND TRIM(UPPER(CID_DESCRICAO)) = ?",
+            (empresa, filial, nome_upper)
+        )
+        row = cur.fetchone()
+        if row: return row[0]
+    except Exception:
+        pass
+    return None
 
 
 # =============================================================================
@@ -245,7 +318,7 @@ def buscar_cidade_ibge(conn, codigo_ibge, empresa, filial, nome_cidade='', cep='
         conn.commit() # Salva a cidade imediatamente no banco
         return codigo_ibge
     except Exception as e:
-        print(f"Erro ao auto-cadastrar a cidade {codigo_ibge}: {e}")
+        _log.error(f"Erro ao auto-cadastrar a cidade {codigo_ibge}: {e}")
         conn.rollback()
         return None
 
@@ -259,15 +332,31 @@ def buscar_clientes_existentes(conn, empresa, filial):
     # Retorna um dicionário {cnpj_apenas_numeros: cf_codigo}
     return {re.sub(r'\D', '', str(row[0])): row[1] for row in cur.fetchall() if row[0]}
 
-def buscar_proximo_codigo_cli_for(conn, empresa, filial):
-    """Gera o próximo CF_CODIGO sequencial."""
+def buscar_codigo_disponivel(conn, empresa, filial, codigo_preferencial=None):
+    """
+    Retorna o menor CF_CODIGO disponível para (empresa, filial).
+    Se codigo_preferencial for informado e estiver livre, retorna ele.
+    Caso contrário, encontra o menor número inteiro positivo disponível (preenche lacunas).
+    """
     cur = conn.cursor()
     cur.execute(
-        "SELECT COALESCE(MAX(CF_CODIGO), 0) + 1 FROM TABELA_CLI_FOR "
+        "SELECT CF_CODIGO FROM TABELA_CLI_FOR "
         "WHERE CF_EMPRESA = ? AND CF_FILIAL = ?",
         (empresa, filial)
     )
-    return cur.fetchone()[0]
+    codigos = sorted(set(row[0] for row in cur.fetchall()))
+
+    if codigo_preferencial is not None and codigo_preferencial not in codigos:
+        return codigo_preferencial
+
+    menor = 1
+    for c in codigos:
+        if c == menor:
+            menor += 1
+        elif c > menor:
+            break
+
+    return menor
 
 def buscar_ou_criar_condicao_pgto(conn, duplicatas, tipo_pagamento=None):
     """
@@ -339,6 +428,35 @@ def buscar_ou_criar_condicao_pgto(conn, duplicatas, tipo_pagamento=None):
         conn.rollback()
         raise Exception(f"Erro no BD ao criar condição: {e}")
         
+def buscar_dados_completos_clientes(conn, empresa, filial):
+    """Retorna dict {cnpj_limpo: {dados}} com todos os clientes do ERP para reconciliação."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT CF_CPF_CGC, CF_CODIGO, CF_RAZAO, CF_FANTASIA,
+               CF_RG_IE, CF_ENDERECO, CF_NRO_END, CF_BAIRRO,
+               CF_CIDADE, CF_CEP, CF_FONE1, CF_EMAIL
+        FROM TABELA_CLI_FOR
+        WHERE CF_EMPRESA = ? AND CF_FILIAL = ?
+    """, (empresa, filial))
+
+    dados = {}
+    for row in cur.fetchall():
+        cnpj = re.sub(r'\D', '', str(row[0])) if row[0] else ''
+        dados[cnpj] = {
+            'codigo': row[1],
+            'razao': (row[2] or '').strip(),
+            'fantasia': (row[3] or '').strip(),
+            'ie': (row[4] or '').strip(),
+            'endereco': (row[5] or '').strip(),
+            'nro_end': (row[6] or '').strip(),
+            'bairro': (row[7] or '').strip(),
+            'cidade_ibge': row[8],
+            'cep': (row[9] or '').strip(),
+            'fone1': (row[10] or '').strip(),
+            'email': (row[11] or '').strip(),
+        }
+    return dados
+
 def listar_condicoes_pagamento(conn):
     """Lista todas as condições de pagamento cadastradas."""
     cur = conn.cursor()
@@ -352,6 +470,13 @@ def listar_condicoes_pagamento(conn):
 def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=None, checar_cancelamento=None):
     """Insere os clientes/fornecedores no banco aplicando todas as regras."""
     cur = conn.cursor()
+
+    # Carrega todos os códigos existentes para gap-filling
+    cur.execute(
+        "SELECT CF_CODIGO FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?",
+        (empresa, filial)
+    )
+    codigos_usados = set(row[0] for row in cur.fetchall())
     
     sql = """
         INSERT INTO TABELA_CLI_FOR (
@@ -436,8 +561,16 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
             else:
                 cond_pgto = buscar_ou_criar_condicao_pgto(conn, reg.get('condicao_pagamento', []), reg.get('condicao_pagamento_desc'))
             
-            # Gera o próximo ID do cliente
-            cf_codigo = buscar_proximo_codigo_cli_for(conn, empresa, filial)
+            # Gera o código: usa o preferencial (do XML) se disponível, ou preenche a menor lacuna
+            codigo_preferencial = reg.get('codigo_insercao')
+            if codigo_preferencial is not None and codigo_preferencial not in codigos_usados:
+                cf_codigo = codigo_preferencial
+            else:
+                cf_codigo = 1
+                while cf_codigo in codigos_usados:
+                    cf_codigo += 1
+            codigos_usados.add(cf_codigo)
+            reg['codigo_gerado'] = cf_codigo
             
             valores = (
                 empresa, filial, cf_codigo,
@@ -462,7 +595,7 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
                 reg['_status_importacao'] = 'OK'
             except Exception as e:
                 erros += 1
-                print(f"Erro ao inserir cliente/fornecedor {razao}: {str(e)}")
+                _log.error(f"Erro ao inserir cliente/fornecedor {razao}: {str(e)}")
                 reg['_status_importacao'] = 'ERRO'
                 reg['_erro_importacao'] = str(e)
                 

@@ -130,7 +130,7 @@ def main():
             existentes_codigos = set([str(p.get('produto_codigo', '')) for p in erp_data['produtos']])
             
             for item in itens_xml:
-                uf_dest = 'SP' # Idealmente extraído da tag dest do XML (mockado para auditoria base)
+                uf_dest = item.get('uf_dest', 'SP')
                 val_result = validator.validate(item, uf_dest)
                 
                 resultados.append({'xml': item, 'validacao': val_result})

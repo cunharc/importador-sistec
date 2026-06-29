@@ -5,6 +5,9 @@ if not hasattr(locale, 'resetlocale'):
 from typing import List, Dict, Any
 import fdb
 from utils.firebird_service import FirebirdService
+from utils.logger import get_logger
+
+_log = get_logger('importer')
 
 class FirebirdImporter:
     """
@@ -29,16 +32,18 @@ class FirebirdImporter:
                 valores[idx] = val
         return valores
 
-    def import_produtos(self, produtos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def import_produtos(self, produtos: List[Dict[str, Any]], progress_callback=None) -> Dict[str, Any]:
         """
         Insere um lote de novos produtos na TABELA_PRODUTO.
         Remove automaticamente chaves internas (prefixo '_') que não são colunas do banco.
+        progress_callback: callable(atual, total) opcional para reportar progresso.
         """
         if not produtos:
             return {'inseridos': 0, 'erros': []}
             
         def _callback(cur: fdb.Cursor):
             inseridos = 0
+            total = len(produtos)
             for i, prod in enumerate(produtos):
                 try:
                     prod_limpo = {k: v for k, v in prod.items() if not k.startswith('_')}
@@ -63,8 +68,8 @@ class FirebirdImporter:
                         """
                         cur.execute(sql_unid, [prod.get('PRODUTO_EMPRESA', 1), prod.get('PRODUTO_FILIAL', 1), codigo_produto, cod_unidade])
                     
-                    if inseridos % 100 == 0:
-                        print(f"Progresso: {inseridos}/{len(produtos)} produtos inseridos...")
+                    if progress_callback and (i % 25 == 0 or i == total - 1):
+                        progress_callback(i + 1, total)
                 except Exception as e:
                     # Interrompe o processo e aciona o ROLLBACK da transação
                     raise Exception(f"Erro ao inserir produto '{prod.get('PRODUTO_DESCRICAO', 'N/A')}': {str(e)}")
@@ -106,7 +111,7 @@ class FirebirdImporter:
                     atualizados += 1
                     
                     if atualizados % 100 == 0:
-                        print(f"Progresso: {atualizados}/{len(produtos)} produtos atualizados...")
+                        _log.info(f"Progresso: {atualizados}/{len(produtos)} produtos atualizados...")
                 except Exception as e:
                     raise Exception(f"Erro ao atualizar produto código '{codigo}': {str(e)}")
                     
@@ -194,7 +199,7 @@ class FirebirdImporter:
                             
                     processados += 1
                     if processados % 100 == 0:
-                        print(f"Progresso: {processados}/{len(regras)} regras ICMS importadas...")
+                        _log.info(f"Progresso: {processados}/{len(regras)} regras ICMS importadas...")
                         
                 except Exception as e:
                     raise Exception(f"Erro na regra ICMS {r.get('AICMS_FAIXA')} - Estado {r.get('AICMS_ESTADO')}: {str(e)}")

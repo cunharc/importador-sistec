@@ -8,7 +8,10 @@ class TelaPreview(tk.Toplevel):
     def __init__(self, parent, registros, callback_importar):
         super().__init__(parent)
         self.title("Preview — Dados a serem importados")
-        self.geometry("1000x600")
+        w = min(1100, int(self.winfo_screenwidth() * 0.92))
+        h = min(700, int(self.winfo_screenheight() * 0.85))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent)
         self.grab_set()
         

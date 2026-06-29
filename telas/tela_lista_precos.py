@@ -4,8 +4,86 @@ import configparser
 import threading
 import os
 import datetime
+import logging
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
+
+
+class DropdownListbox(tk.Frame):
+    """Entry + dropdown Listbox com suporte a negrito por item."""
+
+    def __init__(self, parent, width=50, height=8, **kwargs):
+        super().__init__(parent)
+        self._var = tk.StringVar()
+        self._items = []
+        self._bold_set = set()
+        self._height = height
+
+        self.entry = ttk.Entry(self, textvariable=self._var, width=width, state="readonly")
+        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry.bind("<Button-1>", self._show_dropdown)
+
+        self.btn = ttk.Button(self, text="\u25bc", width=3, command=self._show_dropdown)
+        self.btn.pack(side=tk.RIGHT)
+
+        self._top = tk.Toplevel(self)
+        self._top.withdraw()
+        self._top.overrideredirect(True)
+        self._top.attributes("-topmost", True)
+
+        self.listbox = tk.Listbox(self._top, width=width, height=height, exportselection=False,
+                                  font=("Segoe UI", 9))
+        self.listbox.pack(fill=tk.BOTH, expand=True)
+        self.listbox.bind("<ButtonRelease-1>", self._on_select)
+        self.listbox.bind("<Escape>", lambda e: self._hide_dropdown())
+        self.listbox.bind("<Return>", self._on_select)
+        self._top.bind("<FocusOut>", lambda e: self.after(100, self._hide_dropdown))
+
+    def _show_dropdown(self, event=None):
+        if not self._items:
+            return
+        self.listbox.delete(0, tk.END)
+        for item in self._items:
+            idx = self.listbox.size()
+            self.listbox.insert(tk.END, item)
+            if item in self._bold_set:
+                self.listbox.itemconfig(idx, font=("Segoe UI", 9, "bold"))
+            else:
+                self.listbox.itemconfig(idx, font=("Segoe UI", 9))
+
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        self._top.geometry(f"+{x}+{y}")
+        self._top.deiconify()
+        self._top.lift()
+        self.listbox.focus_set()
+
+    def _hide_dropdown(self):
+        self._top.withdraw()
+
+    def _on_select(self, event=None):
+        sel = self.listbox.curselection()
+        if sel:
+            self._var.set(self._items[sel[0]])
+        self._hide_dropdown()
+
+    def get(self):
+        return self._var.get()
+
+    def set(self, value):
+        self._var.set(value)
+
+    def current(self, index):
+        if 0 <= index < len(self._items):
+            self._var.set(self._items[index])
+
+    def set_items(self, items, bold_items=None):
+        self._items = items
+        self._bold_set = set(bold_items) if bold_items else set()
+
+    def config_state(self, state):
+        self.entry.config(state=state)
+
 
 class TelaListaPrecos(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
@@ -52,7 +130,7 @@ class TelaListaPrecos(ttk.Frame):
         rb_existente = ttk.Radiobutton(frame_lista, text="Atualizar Lista Existente:", variable=self.var_modo, value="EXISTENTE", command=self._toggle_modo)
         rb_existente.grid(row=0, column=0, sticky=tk.W, padx=5)
         
-        self.cb_listas = ttk.Combobox(frame_lista, width=50, state="readonly")
+        self.cb_listas = DropdownListbox(frame_lista, width=50)
         self.cb_listas.grid(row=0, column=1, columnspan=3, padx=5, sticky=tk.W)
 
         # Modo Nova Lista
@@ -122,27 +200,42 @@ class TelaListaPrecos(ttk.Frame):
 
     def _toggle_modo(self):
         if self.var_modo.get() == "NOVA":
-            self.cb_listas.config(state=tk.DISABLED)
+            self.cb_listas.config_state(tk.DISABLED)
             self.ent_cod_lista.config(state=tk.NORMAL)
             self.ent_desc_lista.config(state=tk.NORMAL)
         else:
-            self.cb_listas.config(state="readonly")
+            self.cb_listas.config_state("readonly")
             self.ent_cod_lista.config(state=tk.DISABLED)
             self.ent_desc_lista.config(state=tk.DISABLED)
 
     def _carregar_listas_existentes(self):
         try:
             with FirebirdService(self.config_db) as fb:
-                sql = "SELECT DISTINCT LIS_CODIGO, LIS_DESCRICAO FROM TABELA_LISTA_PRECOS WHERE LIS_EMPRESA = ? AND LIS_FILIAL = ? ORDER BY LIS_CODIGO"
+                sql = """
+                    SELECT LIS_CODIGO, LIS_DESCRICAO, LIS_DATA
+                    FROM TABELA_LISTA_PRECOS
+                    WHERE LIS_EMPRESA = ? AND LIS_FILIAL = ?
+                    ORDER BY LIS_CODIGO, LIS_DATA DESC
+                """
                 listas = fb.query(sql, [int(self.empresa), int(self.filial)])
                 
                 self.listas_existentes = []
+                self.listas_info = {}
+                bold_items = []
+                cod_ja_visto = set()
                 for lst in listas:
-                    cod = lst.get('lis_codigo', '')
+                    cod = str(lst.get('lis_codigo', '')).strip()
                     desc = str(lst.get('lis_descricao', '')).strip()
-                    self.listas_existentes.append(f"{cod} - {desc}")
+                    data = lst.get('lis_data', '')
+                    rotulo = f"{cod} - {desc} ({data})"
+                    if rotulo not in self.listas_existentes:
+                        self.listas_existentes.append(rotulo)
+                    if cod not in cod_ja_visto:
+                        bold_items.append(rotulo)
+                        cod_ja_visto.add(cod)
+                    self.listas_info[rotulo] = {'codigo': cod, 'descricao': desc, 'data': data, 'serie': '1'}
                 
-                self.cb_listas['values'] = self.listas_existentes
+                self.cb_listas.set_items(self.listas_existentes, bold_items=bold_items)
                 if self.listas_existentes:
                     self.cb_listas.current(0)
         except Exception as e:
@@ -239,7 +332,7 @@ class TelaListaPrecos(ttk.Frame):
             if self.arquivos_selecionados:
                 for arq in self.arquivos_selecionados:
                     try: itens_xml.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 itens_xml = parse_nfe_folder(self.pasta_xmls)
 
@@ -349,8 +442,13 @@ class TelaListaPrecos(ttk.Frame):
         if modo == "EXISTENTE":
             selecao = self.cb_listas.get()
             if not selecao: return messagebox.showwarning("Atenção", "Selecione uma lista existente.")
-            lis_codigo = selecao.split('-')[0].strip()
-            lis_descricao = selecao.split('-')[1].strip()
+            info = self.listas_info.get(selecao)
+            if not info:
+                return messagebox.showerror("Erro", "Lista selecionada não encontrada.")
+            lis_codigo = info['codigo']
+            lis_descricao = info['descricao']
+            lis_data = info['data']
+            lis_serie = info['serie']
         else:
             lis_codigo = self.ent_cod_lista.get().strip()
             lis_descricao = self.ent_desc_lista.get().strip().upper()
@@ -358,6 +456,8 @@ class TelaListaPrecos(ttk.Frame):
                 return messagebox.showwarning("Atenção", "Informe um Código numérico válido para a Nova Lista.")
             if not lis_descricao:
                 return messagebox.showwarning("Atenção", "Informe uma Descrição para a Nova Lista.")
+            lis_data = datetime.date.today().isoformat()
+            lis_serie = '1'
 
         itens_salvar = []
         for item in self.tree.get_children():
@@ -395,12 +495,12 @@ class TelaListaPrecos(ttk.Frame):
                             ?, ?, ?, ?,
                             ?, ?, ?,
                             ?, ?, ?
-                        ) MATCHING (LIS_EMPRESA, LIS_FILIAL, LIS_CODIGO, LIS_PRODUTO)
+                        )                         MATCHING (LIS_EMPRESA, LIS_FILIAL, LIS_CODIGO, LIS_DATA, LIS_PRODUTO)
                     """
                     
                     for p in itens_salvar:
                         params = (
-                            int(self.empresa), int(self.filial), hoje, int(lis_codigo),
+                            int(self.empresa), int(self.filial), lis_data, int(lis_codigo),
                             int(self.empresa), int(self.filial), p['produto'],
                             lis_descricao[:100], p['preco'], hoje
                         )

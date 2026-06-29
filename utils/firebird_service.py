@@ -153,12 +153,13 @@ if __name__ == '__main__':
         'password': args.password
     }
     
-    print(f"Tentando conectar em {args.host}:{args.port} -> {args.database}")
+    from utils.logger import get_logger
+    _log = get_logger('firebird_test')
+    _log.info(f"Tentando conectar em {args.host}:{args.port} -> {args.database}")
     try:
         with FirebirdService(config) as fb:
-            print("Conexão estabelecida com sucesso!")
-            # Exemplo de consulta simples para testar
+            _log.info("Conexão estabelecida com sucesso!")
             res = fb.query("SELECT 1 AS TESTE FROM RDB$DATABASE")
-            print(f"Resultado do teste: {res}")
+            _log.info(f"Resultado do teste: {res}")
     except Exception as e:
-        print(f"Erro: {e}")
+        _log.error(f"Erro: {e}")

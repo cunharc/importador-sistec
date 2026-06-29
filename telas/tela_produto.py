@@ -52,87 +52,116 @@ class TelaProduto(ttk.Frame):
         self._criar_widgets()
 
     def _criar_widgets(self):
-        # Título
-        lbl_title = tk.Label(self, text="CADASTRO E TRIBUTAÇÃO DE PRODUTOS (XML vs ERP)", font=("Segoe UI", 14, "bold"), fg="#16A085")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # === HEADER ===
+        header = tk.Frame(self, bg="#16A085", padx=15, pady=8)
+        header.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(header, text="CADASTRO E TRIBUTAÇÃO DE PRODUTOS (XML vs ERP)",
+                 font=("Segoe UI", 14, "bold"), bg="#16A085", fg="white").pack(anchor=tk.W)
 
-        # Frame de Seleção de Arquivos
+        # === FILE SELECTION ===
         frame_dir = ttk.Frame(self)
-        frame_dir.pack(fill=tk.X, pady=5)
-        
-        self.ent_pasta = ttk.Entry(frame_dir, width=60)
-        self.ent_pasta.pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar Match", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.RIGHT, padx=5)
+        frame_dir.pack(fill=tk.X, pady=3)
 
-        self.lbl_status = ttk.Label(self, text="Aguardando arquivos para cruzar com o Firebird...", font=("Segoe UI", 9))
-        self.lbl_status.pack(anchor=tk.W, pady=5)
+        tk.Label(frame_dir, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_pasta = ttk.Entry(frame_dir, font=("Segoe UI", 9))
+        self.ent_pasta.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        btn_pasta = ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta)
+        btn_pasta.pack(side=tk.LEFT, padx=2)
+        btn_arq = ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos)
+        btn_arq.pack(side=tk.LEFT, padx=2)
+        self.btn_analisar = tk.Button(frame_dir, text="🔍 Analisar Match",
+                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
+                                       cursor="hand2", padx=10, pady=1,
+                                       command=self._iniciar_analise)
+        self.btn_analisar.pack(side=tk.LEFT, padx=5)
 
-        # Dashboard Cards
-        self.frame_cards = tk.Frame(self, pady=5)
+        # === STATUS BAR ===
+        status_bar = ttk.Frame(self)
+        status_bar.pack(fill=tk.X, pady=2)
+
+        self.lbl_status = ttk.Label(status_bar, text="Aguardando arquivos para cruzar com o Firebird...",
+                                     font=("Segoe UI", 9), foreground="#555")
+        self.lbl_status.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(status_bar, text="Código:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(15, 2))
+        self.var_modo_codigo = tk.StringVar(value="xml")
+        rb_xml = ttk.Radiobutton(status_bar, text="Seguir XML", variable=self.var_modo_codigo, value="xml")
+        rb_xml.pack(side=tk.LEFT, padx=2)
+        rb_seq = ttk.Radiobutton(status_bar, text="Sequencial", variable=self.var_modo_codigo, value="sequencial")
+        rb_seq.pack(side=tk.LEFT, padx=2)
+
+        # === DASHBOARD CARDS ===
+        self.frame_cards = tk.Frame(self, pady=3)
         self.frame_cards.pack(fill=tk.X)
-        
+
         self.card_vermelho = self._criar_card(
-            self.frame_cards, "🔴 NÃO CADASTRADOS", "0", 
-            "#FFF1F0", "#CF1322", "#F5222D", 
+            self.frame_cards, "🔴 NÃO CADASTRADOS", "0",
+            "#FFF1F0", "#CF1322", "#F5222D",
             lambda e: self._filtrar_por_card("NAO_CADASTRADO")
         )
-        self.card_vermelho.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        
+        self.card_vermelho.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+
         self.card_amarelo = self._criar_card(
-            self.frame_cards, "🟡 DIVERGENTES / SUGERIDOS", "0", 
-            "#FFFBE6", "#D48806", "#FAAD14", 
+            self.frame_cards, "🟡 DIVERGENTES / SUGERIDOS", "0",
+            "#FFFBE6", "#D48806", "#FAAD14",
             lambda e: self._filtrar_por_card("DIVERGENTE")
         )
-        self.card_amarelo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-        
+        self.card_amarelo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8)
+
         self.card_verde = self._criar_card(
-            self.frame_cards, "🟢 OK (ENCONTRADOS)", "0", 
-            "#F6FFED", "#389E0D", "#52C41A", 
+            self.frame_cards, "🟢 OK (ENCONTRADOS)", "0",
+            "#F6FFED", "#389E0D", "#52C41A",
             lambda e: self._filtrar_por_card("ENCONTRADO")
         )
-        self.card_verde.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        self.card_verde.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-        # Grade (Treeview)
+        # === TREEVIEW ===
         frame_grade = ttk.Frame(self)
-        frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
+        frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
-        
+
         larguras = [80, 80, 250, 250, 80, 80, 130]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             anchor = tk.W if "DESCRIÇÃO" in col else tk.CENTER
             self.tree.column(col, width=larg, anchor=anchor)
 
-        # Cores para Status
-        self.tree.tag_configure('ENCONTRADO', background='#EAFAF1')  # Verde claro
-        self.tree.tag_configure('DIVERGENTE', background='#FEF9E7')  # Amarelo/Laranja claro
-        self.tree.tag_configure('NAO_CADASTRADO', background='#FDEDEC') # Vermelho claro
-        self.tree.tag_configure('SUGERIDO', background='#D4E6F1') # Azul claro
+        self.tree.tag_configure('ENCONTRADO', background='#EAFAF1')
+        self.tree.tag_configure('DIVERGENTE', background='#FEF9E7')
+        self.tree.tag_configure('NAO_CADASTRADO', background='#FDEDEC')
+        self.tree.tag_configure('SUGERIDO', background='#D4E6F1')
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Rodapé com Botões de Ação
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        # Botões de Injeção no Banco
-        self.btn_cadastrar = tk.Button(frame_fim, text="➕ Apenas Cadastrar", font=("Segoe UI", 9, "bold"), bg="#2980B9", fg="white", cursor="hand2", state=tk.DISABLED, command=lambda: self._injetar_firebird(modo=1))
-        self.btn_cadastrar.pack(side=tk.RIGHT, padx=5)
+        # === FOOTER ===
+        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
+        footer.pack(fill=tk.X, pady=(4, 0))
 
-        self.btn_tributar = tk.Button(frame_fim, text="💲 Apenas Tributar", font=("Segoe UI", 9, "bold"), bg="#E67E22", fg="white", cursor="hand2", state=tk.DISABLED, command=lambda: self._injetar_firebird(modo=2))
-        self.btn_tributar.pack(side=tk.RIGHT, padx=5)
-        
-        self.btn_ambos = tk.Button(frame_fim, text="🔄 Cadastrar + Tributar", font=("Segoe UI", 9, "bold"), bg="#8E44AD", fg="white", cursor="hand2", state=tk.DISABLED, command=lambda: self._injetar_firebird(modo=3))
-        self.btn_ambos.pack(side=tk.RIGHT, padx=5)
+        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
+                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
+                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
+
+        self.btn_ambos = tk.Button(footer, text="🔄 Cadastrar + Tributar",
+                                    font=("Segoe UI", 9, "bold"), bg="#8E44AD", fg="white",
+                                    cursor="hand2", state=tk.DISABLED, padx=14, pady=2,
+                                    command=lambda: self._injetar_firebird(modo=3))
+        self.btn_ambos.pack(side=tk.RIGHT, padx=3)
+
+        self.btn_tributar = tk.Button(footer, text="💲 Apenas Tributar",
+                                       font=("Segoe UI", 9, "bold"), bg="#E67E22", fg="white",
+                                       cursor="hand2", state=tk.DISABLED, padx=14, pady=2,
+                                       command=lambda: self._injetar_firebird(modo=2))
+        self.btn_tributar.pack(side=tk.RIGHT, padx=3)
+
+        self.btn_cadastrar = tk.Button(footer, text="➕ Apenas Cadastrar",
+                                        font=("Segoe UI", 9, "bold"), bg="#2980B9", fg="white",
+                                        cursor="hand2", state=tk.DISABLED, padx=14, pady=2,
+                                        command=lambda: self._injetar_firebird(modo=1))
+        self.btn_cadastrar.pack(side=tk.RIGHT, padx=3)
 
     def _criar_card(self, parent, titulo, valor_inicial, bg_color, border_color, text_color, command):
         card = tk.Frame(parent, bg=bg_color, highlightbackground=border_color, highlightthickness=1, padx=15, pady=10, cursor="hand2")
@@ -234,7 +263,7 @@ class TelaProduto(ttk.Frame):
             if self.arquivos_selecionados:
                 for arq in self.arquivos_selecionados:
                     try: itens_xml.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 itens_xml = parse_nfe_folder(self.pasta_xmls)
 
@@ -246,8 +275,8 @@ class TelaProduto(ttk.Frame):
             self.produtos_erp = {}
             try:
                 with FirebirdService(self.config_db) as fb:
-                    sql = f"SELECT PRODUTO_CODIGO, PRODUTO_DESCRICAO, PRODUTO_CLASS_FISCAL, PRODUTO_UNIDADE_CV FROM TABELA_produto WHERE PRODUTO_EMPRESA = {self.empresa} AND PRODUTO_FILIAL = {self.filial}"
-                    db_data = fb.query(sql)
+                    sql = "SELECT PRODUTO_CODIGO, PRODUTO_DESCRICAO, PRODUTO_CLASS_FISCAL, PRODUTO_UNIDADE_CV FROM TABELA_produto WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?"
+                    db_data = fb.query(sql, [self.empresa, self.filial])
                     # Cria dicionário com a chave sendo o CÓDIGO do ERP em texto limpo
                     for row in db_data:
                         cod = str(row.get('produto_codigo', '')).strip()
@@ -319,7 +348,7 @@ class TelaProduto(ttk.Frame):
             self.parent.after(0, self._renderizar_resultados)
         except Exception as e:
             logging.error(f"Erro no pipeline de Produtos: {e}")
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_resultados(self):
@@ -384,13 +413,25 @@ class TelaProduto(ttk.Frame):
                 with FirebirdService(self.config_db) as fb:
                     cursor = fb.conn.cursor() if hasattr(fb, 'conn') else None
                     
+                    modo_codigo = self.var_modo_codigo.get()
+                    if modo_codigo == 'sequencial':
+                        existentes_rows = fb.query(
+                            "SELECT PRODUTO_CODIGO FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?",
+                            [self.empresa, self.filial]
+                        )
+                        existentes_codigos = set(str(r.get('produto_codigo', '')) for r in existentes_rows)
+                    
                     for data in self.dados_analisados:
                         xml = data['xml']
                         is_novo = data['tag'] == 'NAO_CADASTRADO'
                         ncm_salvar = self._formatar_ncm(xml.get('ncm', ''))
                         
                         if (modo in [1, 3]) and is_novo:
-                            # INSERE NOVO (Cadastro)
+                            codigo_produto = xml.get('cProd', '')
+                            if modo_codigo == 'sequencial':
+                                codigo_produto, _ = DataTransformer.prepare_codigo_produto('', existentes_codigos, modo='sequencial')
+                                existentes_codigos.add(codigo_produto)
+                            
                             sql_in = """
                                 INSERT INTO TABELA_produto (
                                     PRODUTO_EMPRESA, PRODUTO_FILIAL, PRODUTO_CODIGO, 
@@ -399,7 +440,7 @@ class TelaProduto(ttk.Frame):
                                 ) VALUES (?, ?, ?, ?, ?, ?, 'S', 1, 1)
                             """
                             params_in = (
-                                self.empresa, self.filial, xml.get('cProd',''),
+                                self.empresa, self.filial, codigo_produto,
                                 xml.get('xProd','')[:200], xml.get('uCom','')[:2], ncm_salvar[:10]
                             )
                             if cursor: cursor.execute(sql_in, params_in)

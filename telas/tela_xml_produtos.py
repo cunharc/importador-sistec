@@ -11,10 +11,13 @@ from utils.transformer import DataTransformer
 from utils.importer import FirebirdImporter
 
 class ModalPreviewProdutos(tk.Toplevel):
-    def __init__(self, parent, itens, config, config_db, classificacao, grupos_db, subgrupos_db, callback_importar):
+    def __init__(self, parent, itens, config, config_db, classificacao, grupos_db, subgrupos_db, callback_importar, modo_codigo='xml'):
         super().__init__(parent)
         self.title("Preview de Cadastro de Produtos")
-        self.geometry("1000x600")
+        w = min(1100, int(self.winfo_screenwidth() * 0.92))
+        h = min(700, int(self.winfo_screenheight() * 0.85))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent.winfo_toplevel())
         self.grab_set()
         
@@ -25,6 +28,7 @@ class ModalPreviewProdutos(tk.Toplevel):
         self.grupos_db = grupos_db
         self.subgrupos_db = subgrupos_db
         self.callback_importar = callback_importar
+        self.modo_codigo = modo_codigo
         self.produtos_para_inserir = []
         
         self._criar_widgets()
@@ -54,7 +58,7 @@ class ModalPreviewProdutos(tk.Toplevel):
                             novo_dict['PRODUTO_CODIGO'] = erp_match.get('produto_codigo')
                             novo_dict['_ACAO'] = 'UPDATE'
                         else:
-                            codigo_final, cod_aux = DataTransformer.prepare_codigo_produto(item.get('c_prod', ''), existentes_codigos)
+                            codigo_final, cod_aux = DataTransformer.prepare_codigo_produto(item.get('c_prod', ''), existentes_codigos, modo=self.modo_codigo)
                             novo_dict['PRODUTO_CODIGO'] = codigo_final
                             novo_dict['PRODUTO_COD_AUXILIAR'] = cod_aux
                             novo_dict['_ACAO'] = 'INSERT'
@@ -236,88 +240,95 @@ class TelaXmlProdutos(ttk.Frame):
         self.after(500, self._carregar_grupos_db) # Carrega os grupos 0.5s após abrir a tela
 
     def _criar_widgets(self):
-        # Header
-        lbl_title = tk.Label(self, text="AUDITORIA E IMPORTAÇÃO DE PRODUTOS VIA XML", font=("Segoe UI", 14, "bold"), fg="#27AE60")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # === HEADER ===
+        header = tk.Frame(self, bg="#27AE60", padx=15, pady=8)
+        header.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(header, text="AUDITORIA E IMPORTAÇÃO DE PRODUTOS VIA XML",
+                 font=("Segoe UI", 14, "bold"), bg="#27AE60", fg="white").pack(anchor=tk.W)
 
-        # Frame Parâmetros
-        frame_config = ttk.LabelFrame(self, text="Parâmetros Fiscais", padding="10")
-        frame_config.pack(fill=tk.X, pady=5)
+        # === TOP BAR: Config compacta ===
+        top_bar = ttk.LabelFrame(self, text="Configuração", padding="8")
+        top_bar.pack(fill=tk.X, pady=2)
 
-        ttk.Label(frame_config, text="Empresa:").grid(row=0, column=0, padx=5)
-        self.ent_empresa = ttk.Entry(frame_config, width=8)
-        self.ent_empresa.grid(row=0, column=1, padx=5)
+        tk.Label(top_bar, text="Empresa:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, padx=(5, 2), sticky=tk.W)
+        self.ent_empresa = ttk.Entry(top_bar, width=8, font=("Segoe UI", 9))
+        self.ent_empresa.grid(row=0, column=1, padx=(0, 15))
 
-        ttk.Label(frame_config, text="Filial:").grid(row=0, column=2, padx=5)
-        self.ent_filial = ttk.Entry(frame_config, width=8)
-        self.ent_filial.grid(row=0, column=3, padx=5)
-        
-        ttk.Label(frame_config, text="UF Padrão (ICMS):").grid(row=0, column=4, padx=5)
-        self.ent_uf = ttk.Entry(frame_config, width=5)
-        self.ent_uf.grid(row=0, column=5, padx=5)
+        tk.Label(top_bar, text="Filial:", font=("Segoe UI", 9, "bold")).grid(row=0, column=2, padx=(5, 2), sticky=tk.W)
+        self.ent_filial = ttk.Entry(top_bar, width=8, font=("Segoe UI", 9))
+        self.ent_filial.grid(row=0, column=3, padx=(0, 15))
+
+        tk.Label(top_bar, text="UF:", font=("Segoe UI", 9, "bold")).grid(row=0, column=4, padx=(5, 2), sticky=tk.W)
+        self.ent_uf = ttk.Entry(top_bar, width=5, font=("Segoe UI", 9))
+        self.ent_uf.grid(row=0, column=5, padx=(0, 15))
         self.ent_uf.insert(0, "SP")
 
-        # Frame Classificação em Lote (Comboboxes)
-        frame_classif = ttk.LabelFrame(self, text="⚙️ Classificação em Lote (Será aplicada aos produtos selecionados)", padding="10")
-        frame_classif.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(frame_classif, text="Tipo:").grid(row=0, column=0, padx=5, sticky=tk.W)
-        self.cb_tipo = ttk.Combobox(frame_classif, width=20, state="readonly", values=[
-            "1 - Revenda", "2 - Consumo", "3 - Matéria Prima", 
+        ttk.Separator(top_bar, orient=tk.VERTICAL).grid(row=0, column=6, sticky=tk.NS, padx=10, pady=2)
+
+        tk.Label(top_bar, text="Código:", font=("Segoe UI", 9, "bold")).grid(row=0, column=7, padx=(5, 2), sticky=tk.W)
+        self.var_modo_codigo = tk.StringVar(value="xml")
+        rb_xml = ttk.Radiobutton(top_bar, text="Seguir XML", variable=self.var_modo_codigo, value="xml")
+        rb_xml.grid(row=0, column=8, padx=(0, 5))
+        rb_seq = ttk.Radiobutton(top_bar, text="Sequencial", variable=self.var_modo_codigo, value="sequencial")
+        rb_seq.grid(row=0, column=9)
+
+        # === FILE SELECTION ===
+        frame_dir = ttk.Frame(self)
+        frame_dir.pack(fill=tk.X, pady=4)
+
+        tk.Label(frame_dir, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_pasta = ttk.Entry(frame_dir, font=("Segoe UI", 9))
+        self.ent_pasta.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        btn_pasta = ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta)
+        btn_pasta.pack(side=tk.LEFT, padx=2)
+        btn_arq = ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos)
+        btn_arq.pack(side=tk.LEFT, padx=2)
+        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar XMLs", command=self._iniciar_analise)
+        self.btn_analisar.pack(side=tk.LEFT, padx=5)
+
+        # === PROGRESS ===
+        self.progresso = ttk.Progressbar(self, orient=tk.HORIZONTAL, mode='determinate')
+        self.progresso.pack(fill=tk.X, pady=3)
+        self.lbl_status = ttk.Label(self, text="Aguardando arquivos...", font=("Segoe UI", 9), foreground="#555")
+        self.lbl_status.pack(anchor=tk.W, padx=2)
+
+        # === CLASSIFICATION BAR ===
+        class_bar = ttk.LabelFrame(self, text="Classificação em Lote", padding="8")
+        class_bar.pack(fill=tk.X, pady=4)
+
+        tk.Label(class_bar, text="Tipo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, padx=(5, 2), sticky=tk.W)
+        self.cb_tipo = ttk.Combobox(class_bar, width=18, state="readonly", font=("Segoe UI", 9), values=[
+            "1 - Revenda", "2 - Consumo", "3 - Matéria Prima",
             "4 - Produto Acabado", "5 - Serviços", "6 - Outros"
         ])
-        self.cb_tipo.grid(row=0, column=1, padx=5)
+        self.cb_tipo.grid(row=0, column=1, padx=(0, 10))
         self.cb_tipo.set("4 - Produto Acabado")
-        
-        ttk.Label(frame_classif, text="Grupo:").grid(row=0, column=2, padx=5, sticky=tk.W)
-        self.cb_grupo = ttk.Combobox(frame_classif, width=30, state="readonly")
-        self.cb_grupo.grid(row=0, column=3, padx=5)
+
+        tk.Label(class_bar, text="Grupo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=2, padx=(5, 2), sticky=tk.W)
+        self.cb_grupo = ttk.Combobox(class_bar, width=22, state="readonly", font=("Segoe UI", 9))
+        self.cb_grupo.grid(row=0, column=3, padx=(0, 10))
         self.cb_grupo.bind("<<ComboboxSelected>>", self._on_grupo_selecionado)
-        
-        ttk.Label(frame_classif, text="Subgrupo:").grid(row=0, column=4, padx=5, sticky=tk.W)
-        self.cb_subgrupo = ttk.Combobox(frame_classif, width=30, state="readonly")
-        self.cb_subgrupo.grid(row=0, column=5, padx=5)
-        
-        ttk.Button(frame_classif, text="🔄 Recarregar Grupos", command=self._carregar_grupos_db).grid(row=0, column=6, padx=15)
-        
+
+        tk.Label(class_bar, text="Subgrupo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=4, padx=(5, 2), sticky=tk.W)
+        self.cb_subgrupo = ttk.Combobox(class_bar, width=22, state="readonly", font=("Segoe UI", 9))
+        self.cb_subgrupo.grid(row=0, column=5, padx=(0, 10))
+
+        ttk.Button(class_bar, text="🔄", width=3, command=self._carregar_grupos_db).grid(row=0, column=6, padx=(0, 10))
+
         self.var_producao_sistec = tk.BooleanVar(value=False)
-        self.chk_producao_sistec = ttk.Checkbutton(frame_classif, text="Integra Produção Sistec", variable=self.var_producao_sistec)
-        self.chk_producao_sistec.grid(row=1, column=0, columnspan=7, sticky=tk.W, padx=5, pady=5)
+        ttk.Checkbutton(class_bar, text="Produção Sistec", variable=self.var_producao_sistec).grid(row=0, column=7, padx=(0, 10))
 
-        # Frame Diretório
-        frame_dir = ttk.Frame(self)
-        frame_dir.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(frame_dir, text="Pasta com XMLs:").pack(side=tk.LEFT, padx=5)
-        self.ent_pasta = ttk.Entry(frame_dir, width=60)
-        self.ent_pasta.pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar XMLs", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.RIGHT, padx=5)
+        ttk.Separator(class_bar, orient=tk.VERTICAL).grid(row=0, column=8, sticky=tk.NS, padx=10, pady=2)
 
-        # Progresso
-        self.progresso = ttk.Progressbar(self, orient=tk.HORIZONTAL, mode='determinate')
-        self.progresso.pack(fill=tk.X, pady=5)
-        self.lbl_status = ttk.Label(self, text="Aguardando arquivos...", font=("Segoe UI", 9))
-        self.lbl_status.pack(anchor=tk.W)
+        ttk.Button(class_bar, text="☑ Marcar Novos", command=self._marcar_novos).grid(row=0, column=9, padx=2)
+        ttk.Button(class_bar, text="☐ Desmarcar", command=self._desmarcar_todos).grid(row=0, column=10, padx=2)
 
-        # Frame Ações Meio (Seleção)
-        frame_meio = ttk.Frame(self)
-        frame_meio.pack(fill=tk.X, pady=5)
-        
-        ttk.Button(frame_meio, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_meio, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(frame_meio, text="💡 DICA: Clique na coluna 'AÇÃO' de um produto para alternar entre CADASTRAR NOVO, ATUALIZAR ERP ou IGNORAR.", foreground="#003399", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=15)
-
-        # Treeview (Grade de Resultados)
+        # === TREEVIEW ===
         frame_grade = ttk.Frame(self)
-        frame_grade.pack(fill=tk.BOTH, expand=True, pady=10)
+        frame_grade.pack(fill=tk.BOTH, expand=True, pady=6)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
-        
+
         larguras = [40, 120, 80, 80, 200, 200, 80, 80, 150]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
@@ -326,27 +337,33 @@ class TelaXmlProdutos(ttk.Frame):
 
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
-        # Estilos das tags
-        self.tree.tag_configure('VALIDADO', background='#EAFAF1') # Verde claro
-        self.tree.tag_configure('DIVERGENTE', background='#FEF9E7') # Amarelo/Laranja claro
-        self.tree.tag_configure('NAO_ENCONTRADO', background='#FADBD8') # Vermelho claro
+        self.tree.tag_configure('VALIDADO', background='#EAFAF1')
+        self.tree.tag_configure('DIVERGENTE', background='#FEF9E7')
+        self.tree.tag_configure('NAO_ENCONTRADO', background='#FADBD8')
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Ações de Rodapé
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
+        # === FOOTER ===
+        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
+        footer.pack(fill=tk.X, pady=(4, 0))
 
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        self.btn_relatorio = ttk.Button(frame_fim, text="📊 Gerar CSV de Auditoria", state=tk.DISABLED, command=self._gerar_relatorio)
-        self.btn_relatorio.pack(side=tk.RIGHT, padx=5)
+        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
+                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
+                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
 
-        self.btn_importar = ttk.Button(frame_fim, text="🚀 Processar Produtos Selecionados", state=tk.DISABLED, command=self._iniciar_importacao)
-        self.btn_importar.pack(side=tk.RIGHT, padx=5)
+        self.btn_relatorio = tk.Button(footer, text="📊 Gerar CSV", state=tk.DISABLED, command=self._gerar_relatorio,
+                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
+                                       cursor="hand2", padx=12, pady=2)
+        self.btn_relatorio.pack(side=tk.RIGHT, padx=3)
+
+        self.btn_importar = tk.Button(footer, text="🚀 Processar Produtos", state=tk.DISABLED,
+                                      command=self._iniciar_importacao,
+                                      font=("Segoe UI", 9, "bold"), bg="#27AE60", fg="white",
+                                      cursor="hand2", padx=14, pady=2)
+        self.btn_importar.pack(side=tk.RIGHT, padx=3)
 
     def _carregar_config_iniciais(self):
         self.config.read('config.ini', encoding='utf-8')
@@ -584,7 +601,8 @@ class TelaXmlProdutos(ttk.Frame):
             
             if self.arquivos_selecionados:
                 itens_xml = []
-                for arq in self.arquivos_selecionados:
+                total_arqs = len(self.arquivos_selecionados)
+                for i_arq, arq in enumerate(self.arquivos_selecionados):
                     try:
                         nfe_data = parse_nfe(arq)
                         for item in nfe_data['itens']:
@@ -593,10 +611,10 @@ class TelaXmlProdutos(ttk.Frame):
                             itens_xml.append(item)
                     except Exception as e:
                         print(f"Erro ao ler {arq}: {e}")
-                    except Exception:
-                        pass
+                    percent = ((i_arq + 1) / total_arqs) * 50
+                    self.parent.after(0, self._atualizar_progresso, percent, f"Lendo XMLs {i_arq+1}/{total_arqs}...")
             else:
-                itens_xml = parse_nfe_folder(self.pasta_xmls)
+                itens_xml = parse_nfe_folder(self.pasta_xmls, callback_progresso=self._progresso_xml)
             
             if not itens_xml:
                 self.parent.after(0, lambda: messagebox.showinfo("Aviso", "Nenhum produto/item encontrado nos arquivos XML válidos."))
@@ -632,21 +650,30 @@ class TelaXmlProdutos(ttk.Frame):
                     'validacao': result
                 })
                 
-                # Atualiza interface a cada lote
+                # Atualiza interface a cada lote (50% a 100% da barra)
                 if i % 50 == 0 or i == total - 1:
-                    percent = ((i + 1) / total) * 100
+                    percent = 50 + ((i + 1) / total) * 50
                     self.parent.after(0, self._atualizar_progresso, percent, f"Validando {i+1}/{total} itens fiscais...")
             
             # Conclui
             self.parent.after(0, self._renderizar_resultados)
             
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro de Processamento", f"Falha ao executar auditoria:\n{e}"))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro de Processamento", f"Falha ao executar auditoria:\n{e}"))
             self.parent.after(0, self._finalizar_pipeline)
 
+    def _progresso_xml(self, atual, total):
+        percent = (atual / total) * 50
+        self.parent.after(0, self._atualizar_progresso, percent, f"Lendo XMLs {atual}/{total}...")
+
     def _atualizar_progresso(self, valor, texto):
-        self.progresso['value'] = valor
-        self.lbl_status.config(text=texto)
+        try:
+            if not self.winfo_exists():
+                return
+            self.progresso['value'] = valor
+            self.lbl_status.config(text=texto)
+        except tk.TclError:
+            pass
 
     def _renderizar_resultados(self):
         self.dados_grid.clear()
@@ -767,7 +794,7 @@ class TelaXmlProdutos(ttk.Frame):
             'fbclient': self.config.get('FIREBIRD', 'fbclient', fallback='')
         }
         
-        ModalPreviewProdutos(self.parent, selecionados, self.config, config_db, classificacao, self.grupos_db, self.subgrupos_db, self._executar_importacao)
+        ModalPreviewProdutos(self.parent, selecionados, self.config, config_db, classificacao, self.grupos_db, self.subgrupos_db, self._executar_importacao, modo_codigo=self.var_modo_codigo.get())
 
     def _executar_importacao(self, produtos_para_inserir):
         self.btn_importar.config(state=tk.DISABLED)
@@ -793,19 +820,26 @@ class TelaXmlProdutos(ttk.Frame):
             
             with FirebirdService(config_db) as fb:
                 cursor = fb.conn.cursor() if hasattr(fb, 'conn') else None
-                self.parent.after(0, lambda: self.lbl_status.config(text=f"Processando {len(produtos_para_inserir)} produtos no Firebird..."))
                 
                 inserts = [p for p in produtos_para_inserir if p.get('_ACAO') == 'INSERT']
                 updates = [p for p in produtos_para_inserir if p.get('_ACAO') == 'UPDATE']
-                
+                total_geral = len(inserts) + len(updates)
+                concluidos = 0
+
+                def _progresso_insert(atual, total):
+                    pct = (atual / total) * (len(inserts) / total_geral * 100) if total_geral > 0 else 0
+                    self.parent.after(0, self._atualizar_progresso, pct, f"Inserindo {atual}/{total} novos produtos...")
+
                 importer = FirebirdImporter(fb)
-                res_imp = importer.import_produtos(inserts) if inserts else {'inseridos': 0, 'erros': []}
+                res_imp = importer.import_produtos(inserts, progress_callback=_progresso_insert) if inserts else {'inseridos': 0, 'erros': []}
+                concluidos += len(inserts)
                 
                 inseridos = res_imp.get('inseridos', 0)
                 erros = res_imp.get('erros', [])
                 
                 atualizados = 0
-                for p in updates:
+                total_updates = len(updates)
+                for i_up, p in enumerate(updates):
                     try:
                         sql_up = "UPDATE TABELA_PRODUTO SET PRODUTO_DESCRICAO = ?, PRODUTO_CLASS_FISCAL = ?, PRODUTO_CBARRA = ?, PRODUTO_CEST = ?, PRODUTO_UNIDADE_CV = ?, PRODUTO_PRODUCAO_SISTEC = ? WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ? AND PRODUTO_CODIGO = ?"
                         params_up = [p.get('PRODUTO_DESCRICAO', '')[:200], p.get('PRODUTO_CLASS_FISCAL', '')[:8], p.get('PRODUTO_CBARRA', '')[:14], p.get('PRODUTO_CEST', '')[:7], p.get('PRODUTO_UNIDADE_CV', '')[:2], p.get('PRODUTO_PRODUCAO_SISTEC'), emp, fil, p.get('PRODUTO_CODIGO')]
@@ -826,6 +860,10 @@ class TelaXmlProdutos(ttk.Frame):
                         atualizados += 1
                     except Exception as e_up:
                         erros.append({'produto': p, 'detalhe': f"Erro no UPDATE: {e_up}"})
+                    
+                    concluidos += 1
+                    pct = (concluidos / total_geral) * 100 if total_geral > 0 else 0
+                    self.parent.after(0, self._atualizar_progresso, pct, f"Atualizando {i_up+1}/{total_updates} produtos...")
                         
                 if cursor: fb.conn.commit()
                 
@@ -866,6 +904,11 @@ class TelaXmlProdutos(ttk.Frame):
                             with open(caminho_log, 'w', encoding='utf-8') as f:
                                 f.write(log_erros_str)
                             messagebox.showinfo("Log Salvo", f"Arquivo de log salvo em:\n{caminho_log}", parent=self.parent)
+                            if messagebox.askyesno("Abrir Log", "Deseja abrir o arquivo de log agora?", parent=self.parent):
+                                try:
+                                    os.startfile(caminho_log)
+                                except Exception as e:
+                                    messagebox.showerror("Erro", f"Erro ao abrir arquivo:\n{e}", parent=self.parent)
                         except Exception as e:
                             messagebox.showerror("Erro ao Salvar", f"Não foi possível salvar o log:\n{e}", parent=self.parent)
 
@@ -878,4 +921,4 @@ class TelaXmlProdutos(ttk.Frame):
             self.parent.after(0, lambda: self.btn_importar.config(state=tk.NORMAL))
             self.parent.after(0, lambda: self.btn_relatorio.config(state=tk.NORMAL))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
-            self.parent.after(0, lambda: self.lbl_status.config(text="Pronto."))
+            self.parent.after(0, self._atualizar_progresso, 100, "Pronto.")

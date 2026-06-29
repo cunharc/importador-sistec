@@ -4,6 +4,7 @@ import threading
 import csv
 import os
 import sys
+import logging
 
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 
@@ -11,7 +12,10 @@ class DialogoDetalheItens(tk.Toplevel):
     def __init__(self, parent, itens):
         super().__init__(parent)
         self.title(f"Detalhamento de Itens ({len(itens)} registros)")
-        self.geometry("1100x500")
+        w = min(1200, int(self.winfo_screenwidth() * 0.92))
+        h = min(700, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent)
         self.grab_set()
         
@@ -197,13 +201,13 @@ class TelaAuditoriaPorProduto(ttk.Frame):
             if self.arquivos_selecionados:
                 for arq in self.arquivos_selecionados:
                     try: self.itens_lidos.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 self.itens_lidos = parse_nfe_folder(self.pasta_xmls)
 
             self.parent.after(0, self._processar_agrupamento)
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
         finally:
             self.parent.after(0, lambda: self.btn_carregar.config(state=tk.NORMAL))
 

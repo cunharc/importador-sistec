@@ -10,8 +10,10 @@ class TelaSobre(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Sobre o Sistema - Central de Implantação Sistec")
-        self.geometry("800x600")
-        self.minsize(800, 500)
+        w = min(900, int(self.winfo_screenwidth() * 0.85))
+        h = min(700, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent) # Mantém a janela sempre à frente da principal
         self.grab_set()        # Desabilita cliques na janela de trás até fechar esta
         

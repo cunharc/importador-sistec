@@ -6,6 +6,7 @@ from datetime import date
 from collections import defaultdict
 import os
 import sys
+import logging
 
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
@@ -411,7 +412,10 @@ class DialogoDetalhesFaixa(tk.Toplevel):
     def __init__(self, parent, faixas_str, uf_dest, fb_config):
         super().__init__(parent)
         self.title(f"Detalhes das Faixas de ICMS - ERP (UF: {uf_dest})")
-        self.geometry("950x400")
+        w = min(1100, int(self.winfo_screenwidth() * 0.9))
+        h = min(600, int(self.winfo_screenheight() * 0.7))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 400)
         self.transient(parent)
         self.grab_set()
         
@@ -510,7 +514,10 @@ class DialogoFaixasExistentes(tk.Toplevel):
     def __init__(self, parent, fb_config):
         super().__init__(parent)
         self.title("Faixas de ICMS Existentes no ERP")
-        self.geometry("950x500")
+        w = min(1100, int(self.winfo_screenwidth() * 0.9))
+        h = min(650, int(self.winfo_screenheight() * 0.75))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent)
         self.grab_set()
         
@@ -832,7 +839,7 @@ class TelaIcms(ttk.Frame):
             if self.arquivos_selecionados:
                 for arq in self.arquivos_selecionados:
                     try: itens_xml.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 itens_xml = parse_nfe_folder(self.pasta_xmls)
 
@@ -848,7 +855,7 @@ class TelaIcms(ttk.Frame):
                 
             self.parent.after(0, self._renderizar_resultados, mapa_agrupado)
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _agrupar_icms(self, itens):

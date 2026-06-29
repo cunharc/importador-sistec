@@ -63,7 +63,10 @@ class DialogoVincularCondPagto(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.title("Vincular Condições de Pagamento Novas")
-        self.geometry("850x600")
+        w = min(900, int(self.winfo_screenwidth() * 0.85))
+        h = min(700, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.protocol("WM_DELETE_WINDOW", self._cancelar)
 
         self.condicoes_novas = sorted(condicoes_novas)
@@ -193,6 +196,155 @@ class DialogoVincularCondPagto(tk.Toplevel):
         self.mapeamento_final = None
         self.destroy()
 
+class DialogoConciliacao(tk.Toplevel):
+    def __init__(self, parent, dados_xml, dados_erp, empresa, filial):
+        super().__init__(parent)
+        self.title(f"Conciliação XML vs ERP — Empresa {empresa} Filial {filial}")
+        w = min(1200, int(self.winfo_screenwidth() * 0.92))
+        h = min(800, int(self.winfo_screenheight() * 0.85))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
+        self.transient(parent)
+        self.grab_set()
+
+        self.dados_xml = dados_xml
+        self.dados_erp = dados_erp
+
+        self._criar_widgets()
+        self._popular()
+
+    def _criar_widgets(self):
+        topo = ttk.Frame(self)
+        topo.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(topo, text="Comparação dos dados do XML com o cadastro no ERP", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+
+        ttk.Button(topo, text="Fechar", command=self.destroy).pack(side=tk.RIGHT)
+
+        cols = ("CAMPO", "XML", "ERP", "STATUS")
+        frame_tree = ttk.Frame(self)
+        frame_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.tree = ttk.Treeview(frame_tree, columns=cols, show="tree headings", height=20)
+        self.tree.heading("#0", text="Cliente (CNPJ)")
+        self.tree.heading("CAMPO", text="Campo")
+        self.tree.heading("XML", text="Valor no XML")
+        self.tree.heading("ERP", text="Valor no ERP")
+        self.tree.heading("STATUS", text="Status")
+
+        self.tree.column("#0", width=280, minwidth=200)
+        self.tree.column("CAMPO", width=130, anchor=tk.CENTER)
+        self.tree.column("XML", width=200)
+        self.tree.column("ERP", width=200)
+        self.tree.column("STATUS", width=80, anchor=tk.CENTER)
+
+        self.tree.tag_configure('ok', foreground='#006400')
+        self.tree.tag_configure('divergente', foreground='#CC3300')
+        self.tree.tag_configure('novo', foreground='#005B96')
+        self.tree.tag_configure('ausente', foreground='#996600')
+        self.tree.tag_configure('campo_ok', foreground='#2E7D32')
+        self.tree.tag_configure('campo_diff', foreground='#C62828')
+
+        scroll = ttk.Scrollbar(frame_tree, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        legenda = ttk.Frame(self)
+        legenda.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(legenda, text="✅ Ok", foreground='#006400').pack(side=tk.LEFT, padx=10)
+        ttk.Label(legenda, text="⚠ Divergente", foreground='#CC3300').pack(side=tk.LEFT, padx=10)
+        ttk.Label(legenda, text="🆕 Apenas no XML", foreground='#005B96').pack(side=tk.LEFT, padx=10)
+        ttk.Label(legenda, text="❗ Apenas no ERP", foreground='#996600').pack(side=tk.LEFT, padx=10)
+        ttk.Label(legenda, text=f"Total: {len(self.dados_xml)} XML(s) × {len(self.dados_erp)} ERP(s)").pack(side=tk.RIGHT)
+
+    def _normalizar(self, val):
+        if val is None: return ''
+        s = str(val).strip().upper()
+        s = re.sub(r'\s+', ' ', s)
+        return s
+
+    def _comparar_campos(self, val_xml, val_erp):
+        return self._normalizar(val_xml) == self._normalizar(val_erp)
+
+    def _popular(self):
+        xml_por_doc = {}
+        for d in self.dados_xml:
+            reg = d['reg_completo']
+            doc = re.sub(r'\D', '', str(reg.get('documento', '')))
+            xml_por_doc[doc] = reg
+
+        docs_erp = set(self.dados_erp.keys())
+        docs_xml = set(xml_por_doc.keys())
+
+        campos = [
+            ('Razão Social', 'razao', 'razao'),
+            ('Fantasia', 'fantasia', 'fantasia'),
+            ('Insc. Estadual', 'ie', 'ie'),
+            ('Endereço', 'endereco', 'endereco'),
+            ('Número', 'nro_end', 'nro_end'),
+            ('Bairro', 'bairro', 'bairro'),
+            ('CEP', 'cep', 'cep'),
+            ('Telefone', 'fone1', 'fone1'),
+            ('E-mail', 'email', 'email'),
+        ]
+
+        # Clientes em ambos (comparação)
+        for doc in sorted(docs_xml & docs_erp):
+            reg = xml_por_doc[doc]
+            erp = self.dados_erp[doc]
+            doc_fmt = reg.get('documento_formatado', doc)
+
+            divergencias = 0
+            filhos = []
+            for nome_campo, chave_xml, chave_erp in campos:
+                v_xml = str(reg.get(chave_xml, ''))
+                v_erp = str(erp.get(chave_erp, ''))
+                igual = self._comparar_campos(v_xml, v_erp)
+                if not igual:
+                    divergencias += 1
+                tag = 'campo_ok' if igual else 'campo_diff'
+                status = '✓' if igual else '✗'
+                filhos.append((nome_campo, v_xml, v_erp, status, tag))
+
+            razao_xml = reg.get('razao', '')
+            tag_pai = 'ok' if divergencias == 0 else 'divergente'
+            status_pai = '✓ OK' if divergencias == 0 else f'⚠ {divergencias} divergência(s)'
+            pai_id = self.tree.insert("", tk.END, text=f"{doc_fmt} — {razao_xml}", values=("", "", "", status_pai), tags=(tag_pai,), open=False)
+            for nome_campo, v_xml, v_erp, status, tag in filhos:
+                self.tree.insert(pai_id, tk.END, text="", values=(nome_campo, v_xml, v_erp, status), tags=(tag,))
+
+        # Apenas no XML
+        for doc in sorted(docs_xml - docs_erp):
+            reg = xml_por_doc[doc]
+            doc_fmt = reg.get('documento_formatado', doc)
+            razao_xml = reg.get('razao', '')
+            pai_id = self.tree.insert("", tk.END, text=f"{doc_fmt} — {razao_xml}", values=("", "", "", "🆕 NOVO"), tags=('novo',), open=False)
+            for nome_campo, chave_xml, _ in campos:
+                v_xml = str(reg.get(chave_xml, ''))
+                self.tree.insert(pai_id, tk.END, text="", values=(nome_campo, v_xml, "—", "—"), tags=('novo',))
+
+        # Apenas no ERP
+        for doc in sorted(docs_erp - docs_xml):
+            erp = self.dados_erp[doc]
+            razao_erp = erp.get('razao', '')
+            pai_id = self.tree.insert("", tk.END, text=f"{doc} — {razao_erp}", values=("", "", "", "❗ AUSENTE"), tags=('ausente',), open=False)
+            for nome_campo, _, chave_erp in campos:
+                v_erp = str(erp.get(chave_erp, ''))
+                self.tree.insert(pai_id, tk.END, text="", values=(nome_campo, "—", v_erp, "—"), tags=('ausente',))
+
+    def _ajustar_larguras(self):
+        for col in ("#0", "CAMPO", "XML", "ERP", "STATUS"):
+            max_w = self.tree.column(col, 'width')
+            for item in self.tree.get_children():
+                texto = self.tree.item(item, 'text') if col == '#0' else (self.tree.set(item, col) or '')
+                w = self._estimar_largura(texto)
+                if w > max_w: max_w = w
+            self.tree.column(col, width=max_w + 15)
+
+    def _estimar_largura(self, texto):
+        return min(len(str(texto)) * 8, 400)
+
+
 class TelaNFe(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
         super().__init__(parent, padding="10")
@@ -215,72 +367,81 @@ class TelaNFe(ttk.Frame):
         self._carregar_config_iniciais()
 
     def _criar_widgets(self):
-        # Header do Módulo
-        lbl_title = tk.Label(self, text="IMPORTAÇÃO DE CLIENTES/FORNECEDORES VIA XML NF-e", font=("Segoe UI", 14, "bold"), fg="#003399")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # === HEADER ===
+        header = tk.Frame(self, bg="#003399", padx=15, pady=8)
+        header.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(header, text="IMPORTAÇÃO DE CLIENTES / FORNECEDORES VIA XML NF-e",
+                 font=("Segoe UI", 14, "bold"), bg="#003399", fg="white").pack(anchor=tk.W)
 
-        # Frame Configurações Iniciais
-        frame_config = ttk.LabelFrame(self, text="Parâmetros Base", padding="10")
-        frame_config.pack(fill=tk.X, pady=5)
+        # === PARAMETERS BAR ===
+        param_bar = ttk.Frame(self)
+        param_bar.pack(fill=tk.X, pady=2)
 
-        ttk.Label(frame_config, text="Empresa:").grid(row=0, column=0, padx=5)
-        self.ent_empresa = ttk.Entry(frame_config, width=10)
-        self.ent_empresa.grid(row=0, column=1, padx=5)
+        tk.Label(param_bar, text="Empresa:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_empresa = ttk.Entry(param_bar, width=10, font=("Segoe UI", 9))
+        self.ent_empresa.pack(side=tk.LEFT, padx=(0, 15))
 
-        ttk.Label(frame_config, text="Filial:").grid(row=0, column=2, padx=5)
-        self.ent_filial = ttk.Entry(frame_config, width=10)
-        self.ent_filial.grid(row=0, column=3, padx=5)
+        tk.Label(param_bar, text="Filial:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_filial = ttk.Entry(param_bar, width=10, font=("Segoe UI", 9))
+        self.ent_filial.pack(side=tk.LEFT)
 
-        # Ações Topo
-        frame_top = ttk.Frame(self)
-        frame_top.pack(fill=tk.X, pady=5)
+        # === FILE SELECTION ===
+        file_row = ttk.Frame(self)
+        file_row.pack(fill=tk.X, pady=4)
 
-        self.ent_pasta = ttk.Entry(frame_top, width=40)
-        self.ent_pasta.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_add_pasta = ttk.Button(frame_top, text="📁 Pasta", command=self._selecionar_pasta)
+        tk.Label(file_row, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_pasta = ttk.Entry(file_row, font=("Segoe UI", 9))
+        self.ent_pasta.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+
+        self.btn_add_pasta = ttk.Button(file_row, text="📁 Pasta", command=self._selecionar_pasta)
         self.btn_add_pasta.pack(side=tk.LEFT, padx=2)
-        
-        self.btn_add_xml = ttk.Button(frame_top, text="📄 Arquivos", command=self._selecionar_arquivos)
+
+        self.btn_add_xml = ttk.Button(file_row, text="📄 Arquivos", command=self._selecionar_arquivos)
         self.btn_add_xml.pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_top, text="🔍 LER XMLs", command=self._adicionar_xmls)
+
+        self.btn_analisar = tk.Button(file_row, text="🔍 LER XMLs",
+                                       font=("Segoe UI", 9, "bold"), bg="#003399", fg="white",
+                                       cursor="hand2", padx=12, pady=1,
+                                       command=self._adicionar_xmls)
         self.btn_analisar.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_limpar = ttk.Button(frame_top, text="🗑 Limpar Lista", command=self._limpar_lista)
-        self.btn_limpar.pack(side=tk.LEFT, padx=5)
-        
-        self.lbl_total = ttk.Label(frame_top, text="Total: 0 arquivo(s)", font=("Segoe UI", 10, "bold"))
+
+        self.btn_limpar = ttk.Button(file_row, text="🗑 Limpar", command=self._limpar_lista)
+        self.btn_limpar.pack(side=tk.LEFT, padx=2)
+
+        # === PROGRESS + TOTAL ===
+        info_row = ttk.Frame(self)
+        info_row.pack(fill=tk.X, pady=2)
+
+        self.progresso = ttk.Progressbar(info_row, orient=tk.HORIZONTAL, mode='determinate')
+        self.progresso.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
+
+        self.lbl_total = ttk.Label(info_row, text="Total: 0 arquivo(s)", font=("Segoe UI", 10, "bold"), foreground="#003399")
         self.lbl_total.pack(side=tk.RIGHT, padx=5)
 
-        self.progresso = ttk.Progressbar(frame_top, orient=tk.HORIZONTAL, length=150, mode='determinate')
-        self.progresso.pack(side=tk.RIGHT, padx=10)
+        # === FILTERS BAR ===
+        filter_bar = ttk.Frame(self)
+        filter_bar.pack(fill=tk.X, pady=4)
 
-        # Filtros Dinâmicos
-        frame_filtros = ttk.LabelFrame(self, text="Filtros Específicos (Marque quais deseja ver)", padding="10")
-        frame_filtros.pack(fill=tk.X, pady=5)
-        
-        ttk.Button(frame_filtros, text="Filtro Tipo", command=lambda: self._abrir_filtro('TIPO')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_filtros, text="Filtro Cond. Pgto", command=lambda: self._abrir_filtro('CONDIÇÃO PGTO')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_filtros, text="Filtro Status", command=lambda: self._abrir_filtro('STATUS')).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_filtros, text="Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=15)
+        tk.Label(filter_bar, text="Filtros:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 5))
+        ttk.Button(filter_bar, text="Tipo", command=lambda: self._abrir_filtro('TIPO')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_bar, text="Cond. Pgto.", command=lambda: self._abrir_filtro('CONDIÇÃO PGTO')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_bar, text="Status", command=lambda: self._abrir_filtro('STATUS')).pack(side=tk.LEFT, padx=2)
+        ttk.Button(filter_bar, text="✕ Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=10)
 
-        # Grade (Treeview)
+        # === TREEVIEW ===
         frame_grade = ttk.Frame(self)
-        frame_grade.pack(fill=tk.BOTH, expand=True, pady=10)
+        frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
-        
+
         larguras = [80, 80, 60, 140, 250, 80, 120, 80, 160]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "RAZÃO SOCIAL" else tk.W)
 
-        # Configura as cores (Tags) para os status
-        self.tree.tag_configure('NOVO', background='#EAFAF1') # Verde clarinho
-        self.tree.tag_configure('CADASTRADO', background='#FADBD8') # Vermelho clarinho
+        self.tree.tag_configure('NOVO', background='#EAFAF1')
+        self.tree.tag_configure('CADASTRADO', background='#FADBD8')
 
-        # Evento de clique para marcar/desmarcar a caixinha (Checkbox)
         self.tree.bind("<ButtonRelease-1>", self._toggle_checkbox)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
@@ -288,35 +449,40 @@ class TelaNFe(ttk.Frame):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Ações Meio
-        frame_mid = ttk.Frame(self)
-        frame_mid.pack(fill=tk.X, pady=5)
+        # === ACTIONS BAR ===
+        actions_row = ttk.Frame(self)
+        actions_row.pack(fill=tk.X, pady=4)
 
-        ttk.Button(frame_mid, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT, padx=5)
-        ttk.Button(frame_mid, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=5)
+        ttk.Button(actions_row, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions_row, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions_row, text="📊 Conciliação", command=self._abrir_conciliacao).pack(side=tk.LEFT, padx=3)
+
+        self.btn_importar = tk.Button(actions_row, text="🚀 Importar Selecionados", state=tk.DISABLED,
+                                       font=("Segoe UI", 9, "bold"), bg="#003399", fg="white",
+                                       cursor="hand2", padx=14, pady=1,
+                                       command=self._importar_selecionados)
+        self.btn_importar.pack(side=tk.LEFT, padx=8)
 
         self.var_auto_criar_cond_pagto = tk.BooleanVar(self, value=True)
-        self.chk_auto_criar_cond_pagto = ttk.Checkbutton(frame_mid, text="Criar Cond. Pgto. Automaticamente", variable=self.var_auto_criar_cond_pagto, onvalue=True, offvalue=False)
-        self.chk_auto_criar_cond_pagto.pack(side=tk.RIGHT, padx=10)
+        chk_auto = ttk.Checkbutton(actions_row, text="Criar Cond. Pgto. Automaticamente",
+                                    variable=self.var_auto_criar_cond_pagto,
+                                    onvalue=True, offvalue=False)
+        chk_auto.pack(side=tk.LEFT, padx=3)
+        ToolTip(chk_auto, "Se marcado: Cria condições de pagamento inexistentes automaticamente no banco.\nSe desmarcado: Abre janela para vincular as condições do XML com as já existentes.")
 
-        # Tooltip para a flag de condição de pagamento
-        texto_tooltip = "Se marcado: Cria condições de pagamento inexistentes automaticamente no banco.\nSe desmarcado: Abre janela para vincular as condições do XML com as já existentes."
-        ToolTip(self.chk_auto_criar_cond_pagto, texto_tooltip)
+        # === LOG ===
+        log_frame = ttk.LabelFrame(self, text="Log de Importação", padding="5")
+        log_frame.pack(fill=tk.X, pady=(4, 0))
+        self.txt_log = tk.Text(log_frame, height=5, state=tk.DISABLED, bg="#F9F9F9", font=("Segoe UI", 9))
+        self.txt_log.pack(fill=tk.X)
 
-        self.btn_importar = ttk.Button(frame_mid, text="🚀 Importar Selecionados", state=tk.DISABLED, command=self._importar_selecionados)
-        self.btn_importar.pack(side=tk.RIGHT, padx=5)
+        # === FOOTER ===
+        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
+        footer.pack(fill=tk.X, pady=(4, 0))
 
-        # Log
-        frame_log = ttk.LabelFrame(self, text="Log de Importação", padding="5")
-        frame_log.pack(fill=tk.X, pady=5)
-        self.txt_log = tk.Text(frame_log, height=6, state=tk.DISABLED, bg="#F9F9F9")
-        self.txt_log.pack(fill=tk.BOTH, expand=True)
-
-        # Rodapé
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
-
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
+        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
+                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
+                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
 
     def _toggle_checkbox(self, event):
         """Inverte o valor do checkbox se o usuário clicar na primeira coluna."""
@@ -327,7 +493,6 @@ class TelaNFe(ttk.Frame):
                 item = self.tree.identify_row(event.y)
                 if not item: return
                 valores = list(self.tree.item(item, "values"))
-                valores[0] = "☑" if valores[0] == "☐" else "☐"
                 novo_valor = "☑" if valores[0] == "☐" else "☐"
                 valores[0] = novo_valor
                 self.tree.item(item, values=valores)
@@ -398,7 +563,10 @@ class TelaNFe(ttk.Frame):
         
         top = tk.Toplevel(self)
         top.title(f"Filtrar por {coluna}")
-        top.geometry("350x450")
+        w = min(400, int(self.winfo_screenwidth() * 0.4))
+        h = min(500, int(self.winfo_screenheight() * 0.6))
+        top.geometry(f"{w}x{h}")
+        top.minsize(300, 300)
         top.transient(self.winfo_toplevel())
         top.grab_set()
 
@@ -574,7 +742,7 @@ class TelaNFe(ttk.Frame):
             conn = fb.conectar()
             clientes_db = fb.buscar_clientes_existentes(conn, emp, fil)
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro de Banco", f"Falha ao checar cadastros no Firebird:\n{e}"))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro de Banco", f"Falha ao checar cadastros no Firebird:\n{e}"))
             self.parent.after(0, self._finalizar_carregamento_erro)
             return
         finally:
@@ -706,6 +874,29 @@ class TelaNFe(ttk.Frame):
         if self.callback_voltar:
             self.callback_voltar()
 
+    def _abrir_conciliacao(self):
+        if not self.dados_completos:
+            messagebox.showwarning("Aviso", "Leia os XMLs primeiro.")
+            return
+        try:
+            emp = int(self.ent_empresa.get())
+            fil = int(self.ent_filial.get())
+        except ValueError:
+            messagebox.showerror("Erro", "Empresa e Filial devem ser numéricos.")
+            return
+
+        conn = None
+        try:
+            conn = fb.conectar()
+            dados_erp = fb.buscar_dados_completos_clientes(conn, emp, fil)
+        except Exception as e:
+            messagebox.showerror("Erro de Banco", f"Falha ao buscar dados do ERP:\n{e}")
+            return
+        finally:
+            if conn: conn.close()
+
+        DialogoConciliacao(self, self.dados_completos, dados_erp, emp, fil)
+
     def _importar_selecionados(self):
         selecionados = []
         # Filtra apenas os que estão marcados com o "☑"
@@ -765,7 +956,6 @@ class TelaNFe(ttk.Frame):
         self.txt_log.see(tk.END)
 
         try:
-            codigo_atual = fb.buscar_proximo_codigo_cli_for(conn, emp, fil)
             registros_para_inserir = []
             
             for item, valores in selecionados:
@@ -801,7 +991,15 @@ class TelaNFe(ttk.Frame):
                 elif desc_cond == 'N/I': self.txt_log.insert(tk.END, f"ℹ️ Info: XML sem dados de duplicatas/cobrança a prazo para {reg['razao']}.\n")
                 
                 reg_final = reg.copy()
-                reg_final['codigo_gerado'] = codigo_atual
+                
+                # Passa o código preferencial extraído da Razão Social (ex: "123 - Nome" → código 123)
+                cf_cod_antigo = reg.get('cf_cod_antigo')
+                if cf_cod_antigo and cf_cod_antigo != '-':
+                    try:
+                        reg_final['codigo_insercao'] = int(cf_cod_antigo)
+                    except (ValueError, TypeError):
+                        pass
+                
                 reg_final['cidade_ibge'] = cid_codigo
                 reg_final['documento_formatado'] = reg.get('documento_formatado', reg['documento'])
                 reg_final['cond_pagto_id'] = cond_pagto_id
@@ -813,7 +1011,6 @@ class TelaNFe(ttk.Frame):
                     reg_final['condicao_pagamento'] = []
                 
                 registros_para_inserir.append(reg_final)
-                codigo_atual += 1
                 
             sucesso, inseridos, erros = fb.inserir_clientes_nfe(conn, registros_para_inserir, emp, fil)
             
@@ -858,6 +1055,13 @@ class TelaNFe(ttk.Frame):
                 try:
                     with open(caminho, 'w', encoding='utf-8') as f:
                         f.write(conteudo_log)
+                    messagebox.showinfo("Log Salvo", f"Arquivo salvo em:\n{caminho}")
+                    if messagebox.askyesno("Abrir Log", "Deseja abrir o arquivo de log agora?"):
+                        try:
+                            caminho = os.path.normpath(caminho)
+                            os.startfile(caminho)
+                        except Exception as e:
+                            messagebox.showerror("Erro", f"Erro ao abrir arquivo:\n{e}")
                 except Exception as e:
                     messagebox.showerror("Erro", f"Erro ao salvar o arquivo de log:\n{e}")
                     

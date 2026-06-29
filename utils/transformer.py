@@ -44,22 +44,43 @@ class DataTransformer:
         return unidades_map.get(unidade_str, 2)
 
     @staticmethod
-    def prepare_codigo_produto(c_prod: str, existing_codes: Set[str]) -> Tuple[str, str]:
+    def prepare_codigo_produto(c_prod: str, existing_codes: Set[str], modo: str = 'xml') -> Tuple[str, str]:
         """
-        Trata possíveis colisões de código de produto.
+        Gera o código do produto de acordo com o modo selecionado.
+        
+        modo='xml' (padrão): Usa o código do XML. Se já existir, preenche a 
+                             menor lacuna disponível (gap-filling).
+        modo='sequencial': Ignora o código do XML e gera o próximo número 
+                           sequencial disponível.
+        
         Retorna a tupla (PRODUTO_CODIGO, PRODUTO_COD_AUXILIAR).
         """
-        c_prod_str = str(c_prod).strip()
-        if c_prod_str in existing_codes:
-            # Já existe: geramos o próximo número disponível
+        if modo == 'sequencial':
             max_num = 0
             for code in existing_codes:
-                if code.isdigit():
-                    max_num = max(max_num, int(code))
-            novo_codigo = str(max_num + 1)
-            return (novo_codigo, c_prod_str)
+                clean = code.lstrip('0') or '0'
+                if clean.isdigit():
+                    max_num = max(max_num, int(clean))
+            codigo_final = str(max_num + 1)
+            return (codigo_final, None)
+
+        c_prod_str = str(c_prod).strip()
+        c_prod_clean = c_prod_str.lstrip('0') or '0'
+
+        existing_clean = {c.lstrip('0') or '0' for c in existing_codes}
+
+        if c_prod_clean in existing_clean:
+            codigos_numericos = sorted(
+                int(c) for c in existing_clean if c.isdigit()
+            )
+            menor = 1
+            for c in codigos_numericos:
+                if c == menor:
+                    menor += 1
+                elif c > menor:
+                    break
+            return (str(menor), c_prod_str)
         else:
-            # Não existe: Numérico ou Alfanumérico, usa para ambos
             return (c_prod_str, c_prod_str)
 
     @staticmethod
@@ -123,7 +144,7 @@ class DataTransformer:
             'PRODUTO_ESTOQUE_MAX': None,
             'PRODUTO_PESO': 0.0,
             'PRODUTO_REG_MIN_AGR_SAUDE': None,
-            'PRODUTO_SUBST_TRIBUTARIA': 'N',
+            'PRODUTO_SUBST_TRIBUTARIA': 'S' if (xml_item.get('p_icmsst') or 0) > 0 else 'N',
             'PRODUTO_CLASS_FISCAL': ncm_fmt,
             'PRODUTO_PERC_SUBST_TRIBUTARIA': None,
             'PRODUTO_ICMS': 0,

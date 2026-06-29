@@ -4,14 +4,20 @@ import threading
 import csv
 import os
 import sys
+import json
+import logging
+import glob
 
-from utils.xml_reader import parse_nfe_folder, parse_nfe
+from utils.xml_reader import parse_nfe
 
 class DialogoDetalheItens(tk.Toplevel):
     def __init__(self, parent, itens):
         super().__init__(parent)
         self.title(f"Detalhamento de Itens ({len(itens)} registros)")
-        self.geometry("1100x500")
+        w = min(1300, int(self.winfo_screenwidth() * 0.94))
+        h = min(750, int(self.winfo_screenheight() * 0.85))
+        self.geometry(f"{w}x{h}")
+        self.minsize(800, 500)
         self.transient(parent)
         self.grab_set()
         
@@ -22,19 +28,23 @@ class DialogoDetalheItens(tk.Toplevel):
     def _criar_widgets(self):
         frame_top = ttk.Frame(self, padding="5")
         frame_top.pack(fill=tk.X)
-        ttk.Label(frame_top, text="Detalhamento das Notas Fiscais e Itens", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        ttk.Label(frame_top, text="Detalhamento das Notas Fiscais e Itens", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(frame_top, text="📄 Abrir XML", command=self._abrir_xml).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_top, text="📋 Ver Todos os Campos", command=self._ver_campos).pack(side=tk.LEFT, padx=2)
         ttk.Button(frame_top, text="📋 Exportar Excel (CSV)", command=self._exportar_csv).pack(side=tk.RIGHT)
 
         frame_grade = ttk.Frame(self, padding="5")
         frame_grade.pack(fill=tk.BOTH, expand=True)
 
-        self.colunas = ("Nº NFE", "EMISSÃO", "CHAVE", "CNPJ/CPF DEST", "RAZÃO SOCIAL DEST", "CÓD. PROD", "PRODUTO", "QTD", "V. UN", "V. TOTAL")
+        self.colunas = ("Nº NFE", "EMISSÃO", "CHAVE", "CNPJ/CPF DEST", "RAZÃO SOCIAL DEST", "CÓD. PROD", "PRODUTO", "QTD", "V. UN", "V. TOTAL", "ARQUIVO")
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
+        self.tree.bind("<Double-1>", self._ao_duplo_clique)
         
-        larguras = [80, 90, 280, 120, 200, 100, 200, 60, 80, 80]
+        larguras = [80, 90, 220, 120, 180, 100, 200, 60, 80, 80, 150]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=larg, anchor=tk.W if "PRODUTO" in col or "RAZÃO" in col else tk.CENTER)
+            anchor = tk.W if col in ("PRODUTO", "RAZÃO SOCIAL DEST", "ARQUIVO") else tk.CENTER
+            self.tree.column(col, width=larg, anchor=anchor)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         scroll_x = ttk.Scrollbar(frame_grade, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -43,6 +53,76 @@ class DialogoDetalheItens(tk.Toplevel):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def _item_selecionado(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("Aviso", "Selecione um item na lista.", parent=self)
+            return None
+        idx = self.tree.index(sel[0])
+        if idx < len(self.itens):
+            return self.itens[idx]
+        return None
+
+    def _abrir_xml(self):
+        item = self._item_selecionado()
+        if not item:
+            return
+        caminho = item.get('_xml_path', '')
+        if not caminho or not os.path.exists(caminho):
+            messagebox.showerror("Erro", "Arquivo XML não encontrado:\n" + caminho, parent=self)
+            return
+        try:
+            os.startfile(caminho)
+        except Exception as e:
+            messagebox.showerror("Erro", f"Não foi possível abrir o arquivo:\n{e}", parent=self)
+
+    def _ver_campos(self):
+        item = self._item_selecionado()
+        if not item:
+            return
+        top = tk.Toplevel(self)
+        top.title("Todos os Campos do Item")
+        w = min(700, int(self.winfo_screenwidth() * 0.6))
+        h = min(600, int(self.winfo_screenheight() * 0.7))
+        top.geometry(f"{w}x{h}")
+        top.transient(self)
+        top.grab_set()
+
+        frame = ttk.Frame(top, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ("CAMPO", "VALOR")
+        tree = ttk.Treeview(frame, columns=cols, show="headings")
+        tree.heading("CAMPO", text="CAMPO")
+        tree.heading("VALOR", text="VALOR")
+        tree.column("CAMPO", width=250, anchor=tk.W)
+        tree.column("VALOR", width=380, anchor=tk.W)
+
+        scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scroll.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        for chave, valor in sorted(item.items()):
+            if chave == '_xml_path':
+                continue
+            tree.insert("", tk.END, values=(chave, str(valor)))
+
+        frame_btn = ttk.Frame(top, padding="5")
+        frame_btn.pack(fill=tk.X)
+        ttk.Button(frame_btn, text="📄 Abrir XML", command=lambda: self._abrir_xml_especifico(item.get('_xml_path', ''))).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_btn, text="Fechar", command=top.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def _abrir_xml_especifico(self, caminho):
+        if caminho and os.path.exists(caminho):
+            try:
+                os.startfile(caminho)
+            except Exception:
+                pass
+
+    def _ao_duplo_clique(self, event):
+        self._ver_campos()
 
     def _carregar_dados(self):
         for i in self.itens:
@@ -57,7 +137,8 @@ class DialogoDetalheItens(tk.Toplevel):
             qtd = str(i.get('q_com', ''))
             vun = str(i.get('v_un_com', ''))
             vtot = str(i.get('v_prod', ''))
-            self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, qtd, vun, vtot))
+            arquivo = os.path.basename(i.get('_xml_path', ''))
+            self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, qtd, vun, vtot, arquivo))
 
     def _exportar_csv(self):
         caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Detalhamento_Itens.csv", filetypes=[("CSV", "*.csv")])
@@ -86,7 +167,9 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.filtros_ativos = {'NCM': set(), 'CFOP': set(), 'UF DEST': set(), 'CST ICMS': set()}
         self._sort_directions = {}
         self.dados_detalhe = {}
+        self.ncm_descricoes = {}
 
+        self._carregar_ncm_governo()
         self._criar_widgets()
 
     def _criar_widgets(self):
@@ -145,7 +228,8 @@ class TelaAuditoriaGeral(ttk.Frame):
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.colunas = (
-            "QTD", "PRODUTO", "NCM", "CFOP", "UF DEST", "TIPO CLI",
+            "QTD", "PRODUTO", "NCM", "DESCRIÇÃO NCM", "DESCR CONCAT NCM",
+            "CFOP", "UF DEST", "TIPO CLI",
             "CST ICMS", "% ICMS", "% RED.BC", "CBENEF",
             "CST PIS", "% PIS", "CST COF", "% COF",
             "CLASSE RT", "CST RT", "% IBS", "% CBS"
@@ -156,14 +240,14 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         self.tree.bind("<Double-1>", self._abrir_detalhes)
         
-        larguras = [40, 200, 80, 50, 60, 70, 
+        larguras = [40, 200, 80, 200, 200, 50, 60, 70, 
                     70, 60, 60, 80, 
                     60, 50, 60, 50, 
                     90, 60, 50, 50]
         
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
-            anchor = tk.W if col == "PRODUTO" else tk.CENTER
+            anchor = tk.W if col in ("PRODUTO", "DESCRIÇÃO NCM", "DESCR CONCAT NCM") else tk.CENTER
             self.tree.column(col, width=larg, anchor=anchor)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
@@ -192,6 +276,7 @@ class TelaAuditoriaGeral(ttk.Frame):
     def _selecionar_pasta(self):
         pasta = filedialog.askdirectory()
         if pasta:
+            pasta = os.path.normpath(pasta)
             self.ent_pasta.delete(0, tk.END); self.ent_pasta.insert(0, pasta)
             self.pasta_xmls = pasta; self.arquivos_selecionados = []
 
@@ -199,11 +284,35 @@ class TelaAuditoriaGeral(ttk.Frame):
         arquivos = filedialog.askopenfilenames(filetypes=[("XML", "*.xml")])
         if arquivos:
             self.ent_pasta.delete(0, tk.END); self.ent_pasta.insert(0, f"{len(arquivos)} arquivo(s)")
-            self.arquivos_selecionados = list(arquivos); self.pasta_xmls = ""
+            self.arquivos_selecionados = [os.path.normpath(a) for a in arquivos]; self.pasta_xmls = ""
 
     def _fechar_tela(self):
         self.destroy()
         if self.callback_voltar: self.callback_voltar()
+
+    def resource_path(self, relative_path):
+        try:
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+
+    def _carregar_ncm_governo(self):
+        caminho = self.resource_path("ncm_governo.json")
+        if os.path.exists(caminho):
+            try:
+                with open(caminho, 'r', encoding='utf-8') as f:
+                    for row in json.load(f):
+                        cod = str(row.get('codigo', '')).strip()
+                        desc = str(row.get('descricao', '')).strip()
+                        concat = str(row.get('desc_concat', '')).strip()
+                        if cod and desc:
+                            self.ncm_descricoes[cod] = {
+                                'descricao': desc,
+                                'desc_concat': concat or desc,
+                            }
+            except Exception as e:
+                print(f"Erro ao carregar ncm_governo.json: {e}")
 
     def _carregar_xmls(self):
         if not self.pasta_xmls and not self.arquivos_selecionados:
@@ -211,21 +320,79 @@ class TelaAuditoriaGeral(ttk.Frame):
             
         self.btn_carregar.config(state=tk.DISABLED)
         self.lbl_status.config(text="Lendo arquivos XML...")
+
+        self._progress_popup = tk.Toplevel(self.winfo_toplevel())
+        self._progress_popup.title("Carregando XMLs")
+        w_p = min(500, int(self.winfo_screenwidth() * 0.5))
+        h_p = min(150, int(self.winfo_screenheight() * 0.2))
+        self._progress_popup.geometry(f"{w_p}x{h_p}")
+        self._progress_popup.transient(self.winfo_toplevel())
+        self._progress_popup.grab_set()
+        self._progress_popup.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        frame = ttk.Frame(self._progress_popup, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        self._progress_label = ttk.Label(frame, text="Iniciando leitura...")
+        self._progress_label.pack(fill=tk.X, pady=(0, 10))
+
+        self._progress_bar = ttk.Progressbar(frame, mode='determinate')
+        self._progress_bar.pack(fill=tk.X)
+
         threading.Thread(target=self._ler_xmls_bg, daemon=True).start()
+
+    def _atualizar_progresso(self, atual, total):
+        if not hasattr(self, '_progress_bar') or not self._progress_bar:
+            return
+        percent = (atual / total) * 100
+        self._progress_bar['value'] = percent
+        self._progress_label.config(text=f"Lendo arquivo {atual} de {total} ({percent:.1f}%)")
+
+    def _fechar_progresso(self):
+        if hasattr(self, '_progress_popup') and self._progress_popup:
+            try:
+                self._progress_popup.destroy()
+            except Exception:
+                pass
+            self._progress_popup = None
 
     def _ler_xmls_bg(self):
         try:
             self.itens_lidos = []
             if self.arquivos_selecionados:
-                for arq in self.arquivos_selecionados:
-                    try: self.itens_lidos.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                total = len(self.arquivos_selecionados)
+                for i, arq in enumerate(self.arquivos_selecionados):
+                    self.parent.after(0, self._atualizar_progresso, i + 1, total)
+                    try:
+                        nfe_data = parse_nfe(arq)
+                        if nfe_data and nfe_data.get('itens'):
+                            for item in nfe_data['itens']:
+                                item['chave_nfe'] = nfe_data['chave_nfe']
+                                item['_xml_path'] = arq
+                                self.itens_lidos.append(item)
+                    except Exception:
+                        logging.warning(f"Erro ao processar XML: {arq}")
             else:
-                self.itens_lidos = parse_nfe_folder(self.pasta_xmls)
+                pattern = os.path.join(self.pasta_xmls, '**', '*.xml')
+                xml_files = [os.path.normpath(f) for f in glob.glob(pattern, recursive=True)]
+                total = len(xml_files)
+                for i, arq in enumerate(xml_files):
+                    self.parent.after(0, self._atualizar_progresso, i + 1, total)
+                    try:
+                        nfe_data = parse_nfe(arq)
+                        if nfe_data and nfe_data.get('itens'):
+                            for item in nfe_data['itens']:
+                                item['chave_nfe'] = nfe_data['chave_nfe']
+                                item['_xml_path'] = arq
+                                self.itens_lidos.append(item)
+                    except Exception:
+                        logging.warning(f"Erro ao processar XML: {arq}")
 
+            self.parent.after(0, self._fechar_progresso)
             self.parent.after(0, self._processar_agrupamento)
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, self._fechar_progresso)
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
         finally:
             self.parent.after(0, lambda: self.btn_carregar.config(state=tk.NORMAL))
 
@@ -256,7 +423,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         mapa = {}
         for i in self.itens_lidos:
             chave = []
-            if grp_prod: chave.append(str(i.get('cProd', '')))
+            if grp_prod: chave.append(str(i.get('c_prod', i.get('cProd', ''))))
             if grp_ncm: chave.append(str(i.get('ncm', '')))
             if grp_cfop: chave.append(str(i.get('cfop', '')))
             if grp_uf: chave.append(str(i.get('uf_dest', '')))
@@ -276,8 +443,19 @@ class TelaAuditoriaGeral(ttk.Frame):
         linhas = []
         for grupo_itens in mapa.values():
             qtd = len(grupo_itens)
-            produtos = [f"{i.get('cProd','')} - {i.get('xProd','')}" for i in grupo_itens]
+            produtos = [f"{i.get('c_prod', i.get('cProd', ''))} - {i.get('x_prod', i.get('xProd', ''))}" for i in grupo_itens]
             ncms = [i.get('ncm', '') for i in grupo_itens]
+            desc_ncms = []
+            desc_concat_ncms = []
+            for ncm in ncms:
+                ncm_key = str(ncm).replace('.', '').replace('-', '').strip()
+                info = self.ncm_descricoes.get(ncm_key)
+                if info:
+                    desc_ncms.append(info['descricao'])
+                    desc_concat_ncms.append(info['desc_concat'])
+                else:
+                    desc_ncms.append("-")
+                    desc_concat_ncms.append("-")
             cfops = [i.get('cfop', '') for i in grupo_itens]
             ufs = [i.get('uf_dest', '') for i in grupo_itens]
             tipos = [i.get('tipo_cliente', 'CT') for i in grupo_itens]
@@ -299,6 +477,7 @@ class TelaAuditoriaGeral(ttk.Frame):
             
             val = (
                 qtd, self._get_distinct(produtos), self._get_distinct(ncms),
+                self._get_distinct(desc_ncms), self._get_distinct(desc_concat_ncms),
                 self._get_distinct(cfops), self._get_distinct(ufs), self._get_distinct(tipos),
                 self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds), self._get_distinct(cbenefs),
                 self._get_distinct(pis_csts), self._get_distinct(p_pis), self._get_distinct(cof_csts), self._get_distinct(p_cof),

@@ -18,7 +18,7 @@ def validator_mock():
     return ValidatorFiscal(erp_produtos, regras_icms, [], [], [])
 
 def test_validar_produto_nao_encontrado(validator_mock):
-    xml_item = {'x_prod': 'PRODUTO DESCONHECIDO', 'ncm': '00000000'}
+    xml_item = {'x_prod': 'XYZ DESCONHECIDO', 'ncm': '00000000'}
     res = validator_mock.validate(xml_item, 'SP')
     assert res.status == 'NAO_ENCONTRADO'
 

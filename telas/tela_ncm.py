@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import csv
-import glob
 import logging
 
 from utils.xml_reader import parse_nfe_folder, parse_nfe
@@ -19,125 +18,509 @@ logging.basicConfig(
 )
 
 class DialogoPreviewNCM(tk.Toplevel):
-    def __init__(self, parent, registros, callback_confirmar):
+    def __init__(self, parent, registros, callback_confirmar, faixas_icms=None, regras_rt=None, config_db=None, empresa='1', filial='1'):
         super().__init__(parent)
         self.title("Revisão de NCMs antes de Salvar no ERP")
-        self.geometry("950x600")
+        w = min(1100, int(self.winfo_screenwidth() * 0.92))
+        h = min(750, int(self.winfo_screenheight() * 0.85))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
         self.transient(parent)
         self.grab_set()
 
         self.registros = registros
         self.callback_confirmar = callback_confirmar
+        self.faixas_icms = faixas_icms or {}
+        self.regras_rt = regras_rt or []
+        self.config_db = config_db or {}
+        self.empresa = empresa
+        self.filial = filial
         self.item_selecionado = None
-        
+        self._ncm_atual = None
+
+        self._build_opcoes_faixas()
         self._criar_widgets()
         self._carregar_dados()
-        
+
+    def _build_opcoes_faixas(self):
+        self.opcoes_faixa_icms = []
+        self.icms_faixa_map = {}
+        icms_set = set()
+        for estado, faixas in self.faixas_icms.items():
+            for r in faixas:
+                faixa_num = str(r.get('aicms_faixa', '')).strip()
+                if not faixa_num:
+                    continue
+                cst = r.get('_cst_cont', '000')
+                alq = r.get('_alq_cont', 0)
+                opt = f"{faixa_num} - {estado} - CST {cst} - {alq}%"
+                icms_set.add(opt)
+        for opt in sorted(icms_set):
+            self.opcoes_faixa_icms.append(opt)
+            self.icms_faixa_map[opt] = opt.split(' - ')[0]
+
+        self.opcoes_faixa_reforma = []
+        self.reforma_faixa_map = {}
+        for r in self.regras_rt:
+            rid = str(r.get('id', '')).strip()
+            rclass = str(r.get('class', '0')).strip()
+            rcst = str(r.get('cst', '0')).strip()
+            ribs = r.get('ibs', 0)
+            rcbs = r.get('cbs', 0)
+            opt = f"{rid} - Class {rclass} - CST {rcst} - IBS {ribs}% - CBS {rcbs}%"
+            self.opcoes_faixa_reforma.append(opt)
+            self.reforma_faixa_map[opt] = rid
+
     def _criar_widgets(self):
         lbl_title = tk.Label(self, text="Revise e ajuste os dados extraídos do XML antes de gravar no ERP:", font=("Segoe UI", 12, "bold"))
         lbl_title.pack(anchor=tk.W, padx=10, pady=10)
-        
+
         frame_grid = ttk.Frame(self)
         frame_grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        self.colunas = ("NCM", "STATUS", "DESCRIÇÃO", "FAIXA ICMS", "CST PIS", "PIS %", "CST COF", "COFINS %")
+
+        self.colunas = ("NCM", "STATUS", "DESCRIÇÃO", "FAIXA ICMS", "FAIXA REFORMA", "CST PIS", "PIS %", "CST COF", "COFINS %")
         self.tree = ttk.Treeview(frame_grid, columns=self.colunas, show="headings", selectmode="browse")
-        
-        larguras = [80, 80, 300, 80, 60, 60, 60, 60]
+
+        larguras = [80, 80, 300, 80, 80, 60, 60, 60, 60]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col)
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
-            
+
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        
+
         scroll_y = ttk.Scrollbar(frame_grid, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         # Frame de Edição Manual
         frame_edicao = ttk.LabelFrame(self, text="Editar NCM Selecionado", padding="10")
         frame_edicao.pack(fill=tk.X, padx=10, pady=10)
-        
+
         self.var_desc = tk.StringVar(self)
         self.var_faixa = tk.StringVar(self)
+        self.var_faixa_reforma = tk.StringVar(self)
         self.var_cst_pis = tk.StringVar(self)
-        self.var_pis = tk.DoubleVar(self)
+        self.var_pis = tk.StringVar(self)
         self.var_cst_cof = tk.StringVar(self)
-        self.var_cof = tk.DoubleVar(self)
-        
+        self.var_cof = tk.StringVar(self)
+        self.var_st_saida = tk.StringVar(self)
+        self.var_st_compra = tk.StringVar(self)
+
         ttk.Label(frame_edicao, text="Descrição:").grid(row=0, column=0, sticky=tk.W, padx=5)
         ttk.Entry(frame_edicao, textvariable=self.var_desc, width=50).grid(row=0, column=1, columnspan=3, sticky=tk.W, padx=5, pady=2)
-        
+
         ttk.Label(frame_edicao, text="Faixa ICMS:").grid(row=1, column=0, sticky=tk.W, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_faixa, width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame_edicao, text="CST PIS:").grid(row=1, column=2, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cst_pis, width=8).grid(row=1, column=3, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame_edicao, text="PIS %:").grid(row=1, column=4, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_pis, width=8).grid(row=1, column=5, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame_edicao, text="CST COF:").grid(row=2, column=2, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cst_cof, width=8).grid(row=2, column=3, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Label(frame_edicao, text="COFINS %:").grid(row=2, column=4, sticky=tk.E, padx=5)
-        ttk.Entry(frame_edicao, textvariable=self.var_cof, width=8).grid(row=2, column=5, sticky=tk.W, padx=5, pady=2)
-        
-        ttk.Button(frame_edicao, text="✔️ Aplicar Alteração na Linha", command=self._aplicar_edicao).grid(row=0, column=6, rowspan=3, padx=20)
-        
+        self.cmb_faixa_icms = ttk.Combobox(frame_edicao, textvariable=self.var_faixa, values=self.opcoes_faixa_icms, width=40, state='normal')
+        self.cmb_faixa_icms.grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="CST PIS:").grid(row=1, column=3, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cst_pis, width=8).grid(row=1, column=4, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="PIS %:").grid(row=1, column=5, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_pis, width=8).grid(row=1, column=6, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="Faixa Reforma:").grid(row=2, column=0, sticky=tk.W, padx=5)
+        self.cmb_faixa_reforma = ttk.Combobox(frame_edicao, textvariable=self.var_faixa_reforma, values=self.opcoes_faixa_reforma, width=50, state='normal')
+        self.cmb_faixa_reforma.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="CST COF:").grid(row=2, column=3, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cst_cof, width=8).grid(row=2, column=4, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="COFINS %:").grid(row=2, column=5, sticky=tk.E, padx=5)
+        ttk.Entry(frame_edicao, textvariable=self.var_cof, width=8).grid(row=2, column=6, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame_edicao, text="ST Saída:").grid(row=3, column=0, sticky=tk.W, padx=5)
+        self.cmb_st_saida = ttk.Combobox(frame_edicao, textvariable=self.var_st_saida, values=['N', 'S'], width=6, state='readonly')
+        self.cmb_st_saida.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        self.var_st_saida.set('N')
+        self.var_st_saida.trace_add('write', self._on_st_change)
+
+        ttk.Label(frame_edicao, text="ST Compra:").grid(row=3, column=2, sticky=tk.W, padx=5)
+        self.cmb_st_compra = ttk.Combobox(frame_edicao, textvariable=self.var_st_compra, values=['N', 'S'], width=6, state='readonly')
+        self.cmb_st_compra.grid(row=3, column=3, sticky=tk.W, padx=5, pady=2)
+        self.var_st_compra.set('N')
+        self.var_st_compra.trace_add('write', self._on_st_change)
+
+        self.btn_config_st = ttk.Button(frame_edicao, text="⚙ Configurar ST", command=self._abrir_iva_st, state=tk.DISABLED)
+        self.btn_config_st.grid(row=3, column=4, padx=10)
+
+        ttk.Button(frame_edicao, text="✔️ Aplicar Alteração na Linha", command=self._aplicar_edicao).grid(row=0, column=7, rowspan=4, padx=20)
+
         frame_bot = ttk.Frame(self, padding="10")
         frame_bot.pack(fill=tk.X, side=tk.BOTTOM)
-        
+
         ttk.Button(frame_bot, text="❌ Cancelar", command=self.destroy).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_bot, text="💾 Confirmar e Salvar no ERP", command=self._confirmar).pack(side=tk.RIGHT, padx=5)
-        
+
     def _carregar_dados(self):
         for i, reg in enumerate(self.registros):
+            faixa_icms_display = reg.get('faixa_sugerida', '')
+            faixa_reforma_display = reg.get('reforma_faixa_sugerida', '')
+
+            # Match ICMS suggestion to a formatted option
+            if faixa_icms_display and faixa_icms_display in self.icms_faixa_map:
+                pass
+            elif faixa_icms_display:
+                for opt in self.opcoes_faixa_icms:
+                    if opt.startswith(str(faixa_icms_display)):
+                        faixa_icms_display = opt
+                        break
+                else:
+                    faixa_icms_display = str(faixa_icms_display) if faixa_icms_display else '-'
+
+            # Match Reforma suggestion to a formatted option
+            if faixa_reforma_display and faixa_reforma_display in self.reforma_faixa_map:
+                pass
+            elif faixa_reforma_display and faixa_reforma_display != '-':
+                for opt in self.opcoes_faixa_reforma:
+                    if opt.startswith(str(faixa_reforma_display)):
+                        faixa_reforma_display = opt
+                        break
+                else:
+                    faixa_reforma_display = str(faixa_reforma_display) if faixa_reforma_display else '-'
+            else:
+                faixa_reforma_display = '-'
+
+            reg['faixa_sugerida'] = faixa_icms_display
+            reg['reforma_faixa_sugerida'] = faixa_reforma_display
+
             self.tree.insert("", tk.END, iid=str(i), values=(
-                reg['ncm'], reg['status'], reg['descricao'], reg['faixa_sugerida'],
+                reg['ncm'], reg['status'], reg['descricao'], faixa_icms_display, faixa_reforma_display,
                 reg['cst_pis'], reg['pis_sugerido'], reg['cst_cofins'], reg['cofins_sugerido']
             ))
-            
+
     def _on_select(self, event):
         sel = self.tree.selection()
         if not sel: return
         self.item_selecionado = sel[0]
         idx = int(self.item_selecionado)
         reg = self.registros[idx]
-        
+        ncm = reg['ncm']
+        self._ncm_atual = ncm
+
         self.var_desc.set(reg['descricao'])
         self.var_faixa.set(reg['faixa_sugerida'] if reg['faixa_sugerida'] else '')
+        self.var_faixa_reforma.set(reg.get('reforma_faixa_sugerida', ''))
         self.var_cst_pis.set(reg['cst_pis'])
-        self.var_pis.set(reg['pis_sugerido'])
+        self.var_pis.set(str(reg['pis_sugerido']).replace('.', ','))
         self.var_cst_cof.set(reg['cst_cofins'])
-        self.var_cof.set(reg['cofins_sugerido'])
-        
+        self.var_cof.set(str(reg['cofins_sugerido']).replace('.', ','))
+
+        st_saida = reg.get('cfis_subst_tributaria', '')
+        st_compra = reg.get('cfis_st_compra', '')
+        if not st_saida or st_saida not in ('S', 'N'):
+            st_saida = self._buscar_st_erp(ncm, 'CFIS_SUBST_TRIBUTARIA')
+        if not st_compra or st_compra not in ('S', 'N'):
+            st_compra = self._buscar_st_erp(ncm, 'CFIS_ST_COMPRA')
+        self.var_st_saida.set(st_saida if st_saida in ('S', 'N') else 'N')
+        self.var_st_compra.set(st_compra if st_compra in ('S', 'N') else 'N')
+
+    def _buscar_st_erp(self, ncm, campo):
+        if not self.config_db or not ncm:
+            return 'N'
+        try:
+            with FirebirdService(self.config_db) as fb:
+                cursor = fb.conn.cursor()
+                cursor.execute(f"SELECT {campo} FROM TABELA_class_fiscal WHERE CFIS_CODIGO=? AND CFIS_EMPRESA=? AND CFIS_FILIAL=?",
+                               (ncm, self.empresa, self.filial))
+                row = cursor.fetchone()
+                if row and row[0] in ('S', 'N'):
+                    return row[0]
+        except Exception:
+            pass
+        return 'N'
+
+    def _on_st_change(self, *args):
+        if self.var_st_saida.get() == 'S' or self.var_st_compra.get() == 'S':
+            self.btn_config_st.config(state=tk.NORMAL)
+        else:
+            self.btn_config_st.config(state=tk.DISABLED)
+
+    def _abrir_iva_st(self):
+        ncm = self._ncm_atual
+        if not ncm:
+            return messagebox.showwarning("Aviso", "Selecione um NCM primeiro.", parent=self)
+        DialogoIvaSt(self, ncm, self.empresa, self.filial, self.config_db)
+
     def _aplicar_edicao(self):
         if not self.item_selecionado: return
         idx = int(self.item_selecionado)
-        
+
+        # Extract raw faixa number from formatted combobox value
+        faixa_icms_val = self.var_faixa.get()
+        raw_faixa = self.icms_faixa_map.get(faixa_icms_val, faixa_icms_val)
+
+        faixa_reforma_val = self.var_faixa_reforma.get()
+        raw_reforma = self.reforma_faixa_map.get(faixa_reforma_val, faixa_reforma_val)
+
         self.registros[idx]['descricao'] = self.var_desc.get()
-        self.registros[idx]['faixa_sugerida'] = self.var_faixa.get()
+        self.registros[idx]['faixa_sugerida'] = raw_faixa
+        self.registros[idx]['reforma_faixa_sugerida'] = raw_reforma
+        try:
+            pis_val = float(self.var_pis.get().replace(',', '.'))
+        except ValueError:
+            pis_val = 0.0
+        try:
+            cof_val = float(self.var_cof.get().replace(',', '.'))
+        except ValueError:
+            cof_val = 0.0
+
         self.registros[idx]['cst_pis'] = self.var_cst_pis.get()
-        self.registros[idx]['pis_sugerido'] = self.var_pis.get()
+        self.registros[idx]['pis_sugerido'] = pis_val
         self.registros[idx]['cst_cofins'] = self.var_cst_cof.get()
-        self.registros[idx]['cofins_sugerido'] = self.var_cof.get()
-        
+        self.registros[idx]['cofins_sugerido'] = cof_val
+        self.registros[idx]['cfis_subst_tributaria'] = self.var_st_saida.get()
+        self.registros[idx]['cfis_st_compra'] = self.var_st_compra.get()
+
         self.tree.item(self.item_selecionado, values=(
             self.registros[idx]['ncm'],
             self.registros[idx]['status'],
             self.registros[idx]['descricao'],
-            self.registros[idx]['faixa_sugerida'],
+            faixa_icms_val,
+            faixa_reforma_val,
             self.registros[idx]['cst_pis'],
-            self.registros[idx]['pis_sugerido'],
+            str(pis_val).replace('.', ','),
             self.registros[idx]['cst_cofins'],
-            self.registros[idx]['cofins_sugerido']
+            str(cof_val).replace('.', ',')
         ))
-        
+
     def _confirmar(self):
+        # Convert all formatted faixa values to raw before returning
+        for reg in self.registros:
+            faixa = reg.get('faixa_sugerida', '')
+            if faixa in self.icms_faixa_map:
+                reg['faixa_sugerida'] = self.icms_faixa_map[faixa]
+            ref = reg.get('reforma_faixa_sugerida', '')
+            if ref in self.reforma_faixa_map:
+                reg['reforma_faixa_sugerida'] = self.reforma_faixa_map[ref]
         self.callback_confirmar(self.registros)
         self.destroy()
+
+
+class DialogoIvaSt(tk.Toplevel):
+    def __init__(self, parent, ncm, empresa, filial, config_db):
+        super().__init__(parent)
+        self.title(f"Configuração ST - NCM {ncm}")
+        w = min(900, int(self.winfo_screenwidth() * 0.85))
+        h = min(650, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(640, 480)
+        self.transient(parent)
+        self.grab_set()
+
+        self.ncm = ncm
+        self.empresa = empresa
+        self.filial = filial
+        self.config_db = config_db
+        self.registros = []
+        self._item_editando = None
+
+        self._criar_widgets()
+        self._carregar_dados()
+
+    def _criar_widgets(self):
+        ttk.Label(self, text=f"ST para NCM: {self.ncm}", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W, padx=10, pady=10)
+
+        frame_grid = ttk.Frame(self)
+        frame_grid.pack(fill=tk.BOTH, expand=True, padx=10)
+
+        colunas = ("UF", "DATA", "IVA%", "ALIQ ICMS INT%", "RED ICMS INT%", "FCP", "RED ICMS PRÓPRIO%", "REAJ", "OBS")
+        self.tree = ttk.Treeview(frame_grid, columns=colunas, show="headings", selectmode="browse")
+        largs = [50, 90, 70, 100, 100, 50, 120, 50, 150]
+        for col, larg in zip(colunas, largs):
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=larg, anchor=tk.CENTER if col != "OBS" else tk.W)
+
+        scroll_y = ttk.Scrollbar(frame_grid, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscroll=scroll_y.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        frame_btn = ttk.Frame(self, padding=10)
+        frame_btn.pack(fill=tk.X)
+        ttk.Button(frame_btn, text="➕ Novo", command=self._novo).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_btn, text="✏️ Editar", command=self._editar).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_btn, text="🗑️ Excluir", command=self._excluir).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_btn, text="Fechar", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+
+        frame_form = ttk.LabelFrame(self, text="Dados ST", padding=10)
+        frame_form.pack(fill=tk.X, padx=10, pady=5)
+
+        self.var_uf = tk.StringVar(self)
+        self.var_data = tk.StringVar(self)
+        self.var_iva = tk.StringVar(self)
+        self.var_aliq_int = tk.StringVar(self)
+        self.var_red_int = tk.StringVar(self)
+        self.var_fcp = tk.StringVar(self)
+        self.var_red_proprio = tk.StringVar(self)
+        self.var_reaj = tk.StringVar(self)
+        self.var_obs = tk.StringVar(self)
+
+        row = 0
+        ttk.Label(frame_form, text="UF:").grid(row=row, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_uf, width=6).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(frame_form, text="Data:").grid(row=row, column=2, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_data, width=12).grid(row=row, column=3, sticky=tk.W, padx=5)
+        ttk.Label(frame_form, text="IVA%:").grid(row=row, column=4, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_iva, width=8).grid(row=row, column=5, sticky=tk.W, padx=5)
+        ttk.Label(frame_form, text="Aliq ICMS Int%:").grid(row=row, column=6, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_aliq_int, width=8).grid(row=row, column=7, sticky=tk.W, padx=5)
+
+        row = 1
+        ttk.Label(frame_form, text="Red ICMS Int%:").grid(row=row, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_red_int, width=8).grid(row=row, column=1, sticky=tk.W, padx=5)
+        ttk.Label(frame_form, text="FCP:").grid(row=row, column=2, sticky=tk.W, padx=5)
+        self.cmb_fcp = ttk.Combobox(frame_form, textvariable=self.var_fcp, values=['N', 'S'], width=6, state='readonly')
+        self.cmb_fcp.grid(row=row, column=3, sticky=tk.W, padx=5)
+        self.var_fcp.set('N')
+        ttk.Label(frame_form, text="Red ICMS Próprio%:").grid(row=row, column=4, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_red_proprio, width=8).grid(row=row, column=5, sticky=tk.W, padx=5)
+        ttk.Label(frame_form, text="Reajustado:").grid(row=row, column=6, sticky=tk.W, padx=5)
+        self.cmb_reaj = ttk.Combobox(frame_form, textvariable=self.var_reaj, values=['N', 'S'], width=6, state='readonly')
+        self.cmb_reaj.grid(row=row, column=7, sticky=tk.W, padx=5)
+        self.var_reaj.set('N')
+
+        row = 2
+        ttk.Label(frame_form, text="Obs:").grid(row=row, column=0, sticky=tk.W, padx=5)
+        ttk.Entry(frame_form, textvariable=self.var_obs, width=50).grid(row=row, column=1, columnspan=5, sticky=tk.W, padx=5)
+        ttk.Button(frame_form, text="💾 Salvar", command=self._salvar_registro).grid(row=row, column=6, columnspan=2, padx=10)
+
+    def _carregar_dados(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.registros.clear()
+        try:
+            with FirebirdService(self.config_db) as fb:
+                cursor = fb.conn.cursor()
+                cursor.execute("""
+                    SELECT ST_UF, ST_DATA, ST_IVA, ST_ALIQUOTA_ICMS_INT, ST_REDUICAO_ICMS_INT,
+                           ST_ST_FCB, ST_REDUCAO_ICMS_PROPRIO, ST_REAJUSTADO, ST_OBS
+                    FROM TABELA_CLASSIF_FISCAL_IVA_ST
+                    WHERE ST_CLASSIF_FISCAL=? AND ST_EMPRESA=? AND ST_FILIAL=?
+                    ORDER BY ST_UF, ST_DATA
+                """, (self.ncm, self.empresa, self.filial))
+                for row in cursor.fetchall():
+                    self.registros.append(dict(zip(
+                        ('uf', 'data', 'iva', 'aliq_int', 'red_int', 'fcp', 'red_proprio', 'reaj', 'obs'),
+                        [str(v) if v is not None else '' for v in row]
+                    )))
+                    self.tree.insert("", tk.END, values=row)
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao carregar ST: {e}", parent=self)
+
+    def _on_select(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            self._limpar_form()
+            return
+        idx = int(self.tree.index(sel[0]))
+        self._item_editando = idx
+        r = self.registros[idx]
+        self.var_uf.set(r['uf'])
+        self.var_data.set(r['data'])
+        self.var_iva.set(r['iva'])
+        self.var_aliq_int.set(r['aliq_int'])
+        self.var_red_int.set(r['red_int'])
+        self.var_fcp.set(r['fcp'] if r['fcp'] in ('S', 'N') else 'N')
+        self.var_red_proprio.set(r['red_proprio'])
+        self.var_reaj.set(r['reaj'] if r['reaj'] in ('S', 'N') else 'N')
+        self.var_obs.set(r['obs'])
+
+    def _limpar_form(self):
+        self._item_editando = None
+        self.var_uf.set('')
+        self.var_data.set('')
+        self.var_iva.set('')
+        self.var_aliq_int.set('')
+        self.var_red_int.set('')
+        self.var_fcp.set('N')
+        self.var_red_proprio.set('')
+        self.var_reaj.set('N')
+        self.var_obs.set('')
+
+    def _salvar_registro(self):
+        uf = self.var_uf.get().strip().upper()
+        data = self.var_data.get().strip()
+        if not uf or not data:
+            return messagebox.showwarning("Validação", "UF e Data são obrigatórios.", parent=self)
+
+        iva = self._float_ou_null(self.var_iva.get())
+        aliq_int = self._float_ou_null(self.var_aliq_int.get())
+        red_int = self._float_ou_null(self.var_red_int.get())
+        red_proprio = self._float_ou_null(self.var_red_proprio.get())
+        fcp = self.var_fcp.get() if self.var_fcp.get() in ('S', 'N') else 'N'
+        reaj = self.var_reaj.get() if self.var_reaj.get() in ('S', 'N') else 'N'
+        obs = self.var_obs.get().strip() or None
+
+        try:
+            with FirebirdService(self.config_db) as fb:
+                cursor = fb.conn.cursor()
+                cursor.execute("""
+                    UPDATE OR INSERT INTO TABELA_CLASSIF_FISCAL_IVA_ST
+                    (ST_CLASSIF_FISCAL, ST_EMPRESA, ST_FILIAL, ST_UF, ST_DATA,
+                     ST_IVA, ST_ALIQUOTA_ICMS_INT, ST_REDUICAO_ICMS_INT,
+                     ST_ST_FCB, ST_REDUCAO_ICMS_PROPRIO, ST_REAJUSTADO, ST_OBS)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    MATCHING (ST_CLASSIF_FISCAL, ST_EMPRESA, ST_FILIAL, ST_UF, ST_DATA)
+                """, (self.ncm, self.empresa, self.filial, uf, data,
+                      iva, aliq_int, red_int, fcp, red_proprio, reaj, obs))
+                fb.conn.commit()
+            self._carregar_dados()
+            self._limpar_form()
+            messagebox.showinfo("Sucesso", "Registro ST salvo!", parent=self)
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao salvar ST: {e}", parent=self)
+
+    def _novo(self):
+        self._limpar_form()
+
+    def _editar(self):
+        if self._item_editando is None:
+            messagebox.showwarning("Aviso", "Selecione um registro na lista.", parent=self)
+            return
+        r = self.registros[self._item_editando]
+        self.var_uf.set(r['uf'])
+        self.var_data.set(r['data'])
+        self.var_iva.set(r['iva'])
+        self.var_aliq_int.set(r['aliq_int'])
+        self.var_red_int.set(r['red_int'])
+        self.var_fcp.set(r['fcp'] if r['fcp'] in ('S', 'N') else 'N')
+        self.var_red_proprio.set(r['red_proprio'])
+        self.var_reaj.set(r['reaj'] if r['reaj'] in ('S', 'N') else 'N')
+        self.var_obs.set(r['obs'])
+
+    def _excluir(self):
+        sel = self.tree.selection()
+        if not sel:
+            return messagebox.showwarning("Aviso", "Selecione um registro na lista.", parent=self)
+        idx = int(self.tree.index(sel[0]))
+        r = self.registros[idx]
+        if not messagebox.askyesno("Confirmar", f"Excluir ST para UF {r['uf']} data {r['data']}?", parent=self):
+            return
+        try:
+            with FirebirdService(self.config_db) as fb:
+                cursor = fb.conn.cursor()
+                cursor.execute("""
+                    DELETE FROM TABELA_CLASSIF_FISCAL_IVA_ST
+                    WHERE ST_CLASSIF_FISCAL=? AND ST_EMPRESA=? AND ST_FILIAL=? AND ST_UF=? AND ST_DATA=?
+                """, (self.ncm, self.empresa, self.filial, r['uf'], r['data']))
+                fb.conn.commit()
+            self._carregar_dados()
+            self._limpar_form()
+        except Exception as e:
+            messagebox.showerror("Erro", f"Falha ao excluir: {e}", parent=self)
+
+    @staticmethod
+    def _float_ou_null(val):
+        if val is None or not str(val).strip():
+            return None
+        try:
+            return float(str(val).replace(',', '.'))
+        except ValueError:
+            return None
+
 
 class TelaNcm(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
@@ -359,8 +742,8 @@ class TelaNcm(ttk.Frame):
 
     def _atualizar_contadores(self):
         if not hasattr(self, 'valores_tree'): return
-        novos = sum(1 for v, tag, g in self.valores_tree if "NOVO" in v[3])
-        diferentes = sum(1 for v, tag, g in self.valores_tree if "DIFERENTE" in v[3] or "MÚLTIPLOS" in v[3])
+        novos = sum(1 for v, tag, g in self.valores_tree if v[3].startswith("NOVO"))
+        diferentes = sum(1 for v, tag, g in self.valores_tree if v[3].startswith("DIFERENTE"))
         ok = sum(1 for v, tag, g in self.valores_tree if v[3] == "OK")
         
         if hasattr(self, 'card_vermelho'):
@@ -422,10 +805,6 @@ class TelaNcm(ttk.Frame):
         except ValueError:
             lst = sorted(list(s))
         return " / ".join(map(str, lst)) if len(lst) <= 3 else "*VÁRIOS*"
-
-    def _formatar_cst(self, valor):
-        if not valor: return ''
-        return str(valor).zfill(2)
 
     def _extrair_float(self, valor_str):
         import re
@@ -633,8 +1012,6 @@ class TelaNcm(ttk.Frame):
         self.selecionados_lote = []
         self.btn_sinc_lote.config(state=tk.DISABLED)
         self.cancel_event.clear()
-        self._carregar_faixas_icms()
-        self.analysis_thread = threading.Thread(target=self._pipeline_bg, daemon=True)
         escopo = self.var_escopo.get()
         self._carregar_faixas_icms(escopo)
         self.analysis_thread = threading.Thread(target=self._pipeline_bg, args=(escopo,), daemon=True)
@@ -666,7 +1043,7 @@ class TelaNcm(ttk.Frame):
                         self.parent.after(0, self._finalizar_cancelamento)
                         return
                     try: itens_xml.extend(parse_nfe(arq)['itens'])
-                    except: pass
+                    except Exception: logging.warning(f"Erro ao processar XML: {arq}")
             else:
                 itens_xml = parse_nfe_folder(self.pasta_xmls)
 
@@ -686,11 +1063,6 @@ class TelaNcm(ttk.Frame):
             filial = self.config.get('IMPORTACAO', 'filial', fallback='1')
             try:
                 with FirebirdService(self.config_db) as fb:
-                    sql = """SELECT CFIS_CODIGO, CFIS_DESCRICAO, CFIS_ICMS_VENDA, CFIS_PIS, CFIS_COFINS,
-                             CFIS_CST_PIS, CFIS_CST_COFINS FROM TABELA_class_fiscal 
-                             WHERE CFIS_EMPRESA = ? AND CFIS_FILIAL = ?"""
-                    ncm_db = fb.query(sql, [empresa, filial])
-                    self.dados_sistema = {str(row['cfis_codigo']).replace('.', '').strip(): row for row in ncm_db}
                     sql = """SELECT CFIS_CODIGO, CFIS_DESCRICAO, CFIS_ICMS_VENDA, CFIS_PIS, CFIS_COFINS, CFIS_CST_PIS, CFIS_CST_COFINS FROM TABELA_class_fiscal"""
                     params = [empresa]
                     if escopo == "FILIAL_ATUAL":
@@ -808,8 +1180,6 @@ class TelaNcm(ttk.Frame):
                         status, tag = "OK", "OK"
                 
                 desc_oficial = getattr(self, 'ncm_governo', {}).get(ncm)
-                desc_sys = sys_item.get('cfis_descricao') if sys_item else None
-                
                 desc_exibicao = desc_oficial if desc_oficial else (desc_sys if desc_sys else grupo['descricao'])
                 
                 valores = (
@@ -818,9 +1188,9 @@ class TelaNcm(ttk.Frame):
                     grupo['icms_cst'], f"{grupo['p_icms']}%", f"{grupo['p_red_bc']}%", f"{grupo['p_fcp']}%", f"{grupo['p_mvast']}%", f"{grupo['p_icmsst']}%",
                     grupo['c_benef'] or '-', grupo['c_cred'] or '-', f"{grupo['p_cred']}%" if grupo['p_cred'] else '-',
                     self._formatar_cst(grupo['pis_cst']), f"{grupo['pis_alq']}%", 
-                    f"{sys_item.get('cfis_pis', '-') if sys_item else '-'}" if sys_item else '-',
+                    pis_erp if pis_erp else '-',
                     self._formatar_cst(grupo['cofins_cst']), f"{grupo['cofins_alq']}%",
-                    f"{sys_item.get('cfis_cofins', '-') if sys_item else '-'}" if sys_item else '-',
+                    cofins_erp if cofins_erp else '-',
                     grupo['c_class_trib'] or '-', grupo['ibscbs_cst'] or '-', f"{grupo['p_ibs_uf']}%", f"{grupo['p_cbs']}%",
                     faixa_xml or '-', faixa_erp, regra_rt
                 )
@@ -832,16 +1202,21 @@ class TelaNcm(ttk.Frame):
             self.parent.after(0, self._atualizar_progresso, 95, "Renderizando Tabela Visual...")
             self.parent.after(0, lambda v=valores_tree: self._renderizar_resultados(v))
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
-    def _get_icms_tax_key(self, item):
-        """Gera chave única de tributação ICMS para sub-agrupamento."""
+    def _get_tax_key(self, item):
+        """Gera chave única de tributação para sub-agrupamento (ICMS + PIS + COFINS + CFOP)."""
         icms_cst = str(item.get('icms_cst', '')).strip() or '00'
         p_icms = str(item.get('p_icms', '0')).strip()
         p_red_bc = str(item.get('p_red_bc', '0')).strip()
         c_benef = str(item.get('c_benef', '')).strip()
-        return f"{icms_cst}|{p_icms}|{p_red_bc}|{c_benef}"
+        pis_cst = str(item.get('pis_cst', '')).strip() or '00'
+        p_pis = str(item.get('p_pis', '0')).strip()
+        cofins_cst = str(item.get('cofins_cst', '')).strip() or '00'
+        p_cofins = str(item.get('p_cofins', '0')).strip()
+        cfop = str(item.get('cfop', '')).strip() or '0000'
+        return f"{icms_cst}|{p_icms}|{p_red_bc}|{c_benef}|{pis_cst}|{p_pis}|{cofins_cst}|{p_cofins}|{cfop}"
 
     def _agrupar_ncm(self, itens):
         mapa = {}
@@ -857,7 +1232,7 @@ class TelaNcm(ttk.Frame):
         for ncm, itens_grupo in mapa.items():
             sub_map = {}
             for item in itens_grupo:
-                tax_key = self._get_icms_tax_key(item)
+                tax_key = self._get_tax_key(item)
                 if tax_key not in sub_map:
                     sub_map[tax_key] = []
                 sub_map[tax_key].append(item)
@@ -926,7 +1301,7 @@ class TelaNcm(ttk.Frame):
             status_item = valores[3]
             if status != "Todos":
                 if status == "NOVO" and "NOVO" not in status_item: continue
-                if status == "DIFERENTE" and "DIFERENTE" not in status_item and "MÚLTIPLOS" not in status_item: continue
+                if status == "DIFERENTE" and "DIFERENTE" not in status_item: continue
                 if status == "OK" and status_item != "OK": continue
 
             if filtro:
@@ -1008,11 +1383,11 @@ class TelaNcm(ttk.Frame):
                             if cursor: cursor.execute(sql, (cod, desc))
                             else: fb.execute(sql, (cod, desc))
                             inseridos += 1
-                        except: pass
+                        except Exception: logging.warning(f"Erro ao sincronizar NCM {cod}: {desc}")
                     if cursor: fb.conn.commit()
                 self.parent.after(0, lambda: messagebox.showinfo("Sucesso", f"{inseridos} NCMs inseridos!"))
             except Exception as e:
-                self.parent.after(0, lambda: messagebox.showerror("Erro", str(e)))
+                self.parent.after(0, lambda e=e: messagebox.showerror("Erro", str(e)))
             finally:
                 self.parent.after(0, lambda: self.btn_sincronizar.config(state=tk.NORMAL, text="🔄 Sincronizar NCMs p/ ERP"))
 
@@ -1064,6 +1439,7 @@ class TelaNcm(ttk.Frame):
             cofins = self._extrair_float(valores[21])
             cst_pis = self._extrair_cst(grupo.get('pis_cst', ''))
             cst_cofins = self._extrair_cst(grupo.get('cofins_cst', ''))
+            reforma_faixa = valores[29] if len(valores) > 29 and valores[29] != '-' else ''
             
             desc_oficial = getattr(self, 'ncm_governo', {}).get(ncm_limpo, grupo['descricao'])
             
@@ -1075,7 +1451,14 @@ class TelaNcm(ttk.Frame):
                 'pis_sugerido': pis,
                 'cofins_sugerido': cofins,
                 'cst_pis': cst_pis,
-                'cst_cofins': cst_cofins
+                'cst_cofins': cst_cofins,
+                'reforma_faixa_sugerida': reforma_faixa,
+                'c_class_trib': grupo.get('c_class_trib', ''),
+                'ibscbs_cst': grupo.get('ibscbs_cst', ''),
+                'p_ibs_uf': grupo.get('p_ibs_uf', 0),
+                'p_cbs': grupo.get('p_cbs', 0),
+                'cfis_subst_tributaria': 'S' if (grupo.get('p_icmsst') or 0) > 0 else 'N',
+                'cfis_st_compra': 'S' if (grupo.get('p_icmsst') or 0) > 0 else 'N',
             })
 
         if not registros_para_salvar:
@@ -1087,8 +1470,19 @@ class TelaNcm(ttk.Frame):
         if ignorados_multiplos > 0:
             messagebox.showwarning("Aviso Múltiplos", f"{ignorados_multiplos} NCM(s) com múltiplas variações foram ignorados. Edite-os individualmente.")
 
-        # Abre o Modal para revisão e edição manual (O Novo "Wizard")
-        DialogoPreviewNCM(self.winfo_toplevel(), registros_para_salvar, self._iniciar_sincronizacao_thread)
+        # Abre o Modal para revisão e edição manual
+        empresa = self.config.get('IMPORTACAO', 'empresa', fallback='1')
+        filial = self.config.get('IMPORTACAO', 'filial', fallback='1')
+
+        DialogoPreviewNCM(
+            self.winfo_toplevel(), registros_para_salvar,
+            self._iniciar_sincronizacao_thread,
+            faixas_icms=self.faixas_icms,
+            regras_rt=self.regras_rt,
+            config_db=self.config_db,
+            empresa=empresa,
+            filial=filial
+        )
 
     def _iniciar_sincronizacao_thread(self, registros):
         self.btn_sinc_lote.config(state=tk.DISABLED, text="Sincronizando...")
@@ -1125,20 +1519,27 @@ class TelaNcm(ttk.Frame):
                         cst_pis = self._extrair_cst(str(reg['cst_pis']))
                         cst_cofins = self._extrair_cst(str(reg['cst_cofins']))
 
+                        st_saida = reg.get('cfis_subst_tributaria', 'N')
+                        st_compra = reg.get('cfis_st_compra', 'N')
+                        if st_saida not in ('S', 'N'): st_saida = 'N'
+                        if st_compra not in ('S', 'N'): st_compra = 'N'
+
                         if 'NOVO' in reg['status']:
                             sql_in = """INSERT INTO TABELA_class_fiscal 
                                         (CFIS_EMPRESA, CFIS_FILIAL, CFIS_CODIGO, CFIS_DESCRICAO, CFIS_ICMS_VENDA, 
-                                         CFIS_PIS, CFIS_COFINS, CFIS_CST_PIS, CFIS_CST_COFINS, CFIS_IPI, CFIS_CST_IPI) 
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, '53')"""
-                            params = (empresa, filial, ncm_fmt, desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins)
+                                         CFIS_PIS, CFIS_COFINS, CFIS_CST_PIS, CFIS_CST_COFINS, CFIS_IPI, CFIS_CST_IPI,
+                                         CFIS_SUBST_TRIBUTARIA, CFIS_ST_COMPRA) 
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, '53', ?, ?)"""
+                            params = (empresa, filial, ncm_fmt, desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins, st_saida, st_compra)
                             cursor.execute(sql_in, params)
                             sucesso_ins += 1
                         else:
                             sql_up = """UPDATE TABELA_class_fiscal SET 
                                             CFIS_DESCRICAO = ?, CFIS_ICMS_VENDA = ?, CFIS_PIS = ?, CFIS_COFINS = ?, 
-                                            CFIS_CST_PIS = ?, CFIS_CST_COFINS = ?
+                                            CFIS_CST_PIS = ?, CFIS_CST_COFINS = ?,
+                                            CFIS_SUBST_TRIBUTARIA = ?, CFIS_ST_COMPRA = ?
                                         WHERE CFIS_EMPRESA = ? AND CFIS_FILIAL = ? AND CFIS_CODIGO = ?"""
-                            params = (desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins, empresa, filial, ncm_fmt)
+                            params = (desc_oficial, faixa, pis_alq, cofins_alq, cst_pis, cst_cofins, st_saida, st_compra, empresa, filial, ncm_fmt)
                             cursor.execute(sql_up, params)
                             sucesso_upd += 1
                     except Exception as e:
@@ -1159,7 +1560,7 @@ class TelaNcm(ttk.Frame):
             self.parent.after(0, self._iniciar_analise)
 
         except Exception as e:
-            self.parent.after(0, lambda: messagebox.showerror("Erro Crítico", f"Falha na sincronização com o banco:\n{e}"))
+            self.parent.after(0, lambda e=e: messagebox.showerror("Erro Crítico", f"Falha na sincronização com o banco:\n{e}"))
         finally:
             self.parent.after(0, lambda: self.btn_sinc_lote.config(state=tk.NORMAL, text="🚀 Sincronizar Selecionados"))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))

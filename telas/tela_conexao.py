@@ -10,8 +10,10 @@ class TelaConexao(tk.Toplevel):
         super().__init__(parent)
         self.callback_status = callback_status
         self.title("Configuração de Conexão — Firebird")
-        self.geometry("600x300")
-        self.resizable(False, False)
+        w = min(650, int(self.winfo_screenwidth() * 0.6))
+        h = min(400, int(self.winfo_screenheight() * 0.5))
+        self.geometry(f"{w}x{h}")
+        self.minsize(500, 300)
         self.transient(parent)
         self.grab_set()
         

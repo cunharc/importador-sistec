@@ -14,6 +14,9 @@ PyInstaller.__main__.run([
     '--add-data=sistec.jpg;.',
     '--add-data=Icone_plano.jpg;.',
     '--add-data=nfe_cli.jpg;.',
+    '--add-data=ncm_governo.json;.',
+    '--add-data=cfop_governo.json;.',
+    '--add-data=config_modulos_log.json;.',
     '--add-binary=fbclient_*.dll;.',
     # Otimizações: Exclui módulos pesados que não são usados no seu sistema
     '--exclude-module=matplotlib',

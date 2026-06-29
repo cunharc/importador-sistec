@@ -10,7 +10,7 @@ echo Verificando PyInstaller...
 python -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo PyInstaller nao encontrado. Instalando...
-    pip install pyinstaller
+    python -m pip install pyinstaller
 )
 
 echo.

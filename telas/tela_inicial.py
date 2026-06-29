@@ -20,10 +20,15 @@ from telas.tela_auditoria_geral import TelaAuditoriaGeral
 from telas.tela_auditoria_por_produto import TelaAuditoriaPorProduto
 from telas.tela_sobre import TelaSobre
 from telas.tela_importacao_planilha_produtos import TelaImportacaoPlanilhaProdutos
+from telas.tela_importacao_planilha_clientes import TelaImportacaoPlanilhaClientes
+from telas.tela_importacao_planilha_receber import TelaImportacaoPlanilhaReceber
+from telas.tela_importacao_planilha_pagar import TelaImportacaoPlanilhaPagar
+from telas.tela_importacao_planilha_lista_precos import TelaImportacaoPlanilhaListaPrecos
+from telas.tela_importacao_planilha_tributacao import TelaImportacaoPlanilhaTributacao
 from busca_logs import BuscaLogsWindow
 from utils.firebird_service import FirebirdService
 from utils.updater import verificar_e_atualizar
-from version import get_info, get_modulos_prontos, get_modulos_em_ajuste
+from version import get_info
 
 class TelaInicial(tk.Frame):
     def __init__(self, parent):
@@ -38,9 +43,6 @@ class TelaInicial(tk.Frame):
         self.parent.bind('<F5>', self._on_f5)
         
         self._limpar_logs_antigos()
-        
-        # Verificação silenciosa de atualização em background (2 segundos após abrir a tela)
-        self.after(2000, lambda: verificar_e_atualizar(self.winfo_toplevel(), silencioso=True))
 
     def resource_path(self, relative_path):
         try:
@@ -98,171 +100,29 @@ class TelaInicial(tk.Frame):
         content = tk.Frame(self, bg="#F0F0F0")
         content.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        tk.Label(content, text="Módulos Disponíveis", font=("Segoe UI", 14), bg="#F0F0F0", fg="#1A1A1A").pack(anchor=tk.W, pady=(0, 20))
-        
-        # --- ROLAGEM DOS CARDS (Scrollbar) ---
-        # Necessário pois as 4 linhas de cards podem cortar em monitores menores
-        canvas_container = tk.Frame(content, bg="#F0F0F0")
-        canvas_container.pack(fill=tk.BOTH, expand=True)
+        tk.Label(content, text="Módulos Disponíveis", font=("Segoe UI", 14), bg="#F0F0F0", fg="#1A1A1A").pack(anchor=tk.W, pady=(0, 10))
 
-        canvas = tk.Canvas(canvas_container, bg="#F0F0F0", highlightthickness=0)
-        scroll_y = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL, command=canvas.yview)
-        
-        cards_frame = tk.Frame(canvas, bg="#F0F0F0")
-        cards_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        
-        canvas_window = canvas.create_window((0, 0), window=cards_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scroll_y.set)
-        
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        def _configure_canvas_width(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-        canvas.bind("<Configure>", _configure_canvas_width)
-        
-        def _on_mousewheel(event):
-            if canvas.winfo_viewable():
-                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.parent.bind_all("<MouseWheel>", _on_mousewheel)
-        
-        for i in range(3):
-            cards_frame.grid_columnconfigure(i, weight=1, uniform="col", minsize=300)
-        cards_frame.grid_rowconfigure(0, weight=1, uniform="row")
-        cards_frame.grid_rowconfigure(1, weight=1, uniform="row")
-        cards_frame.grid_rowconfigure(2, weight=1, uniform="row")
-        cards_frame.grid_rowconfigure(3, weight=1, uniform="row")
-        
-        # Card 1: Importar Plano de Contas
-        self._criar_card_modulo(
-            parent=cards_frame, row=0, col=0,
-            titulo="Plano de Contas",
-            descricao="Importação estruturada do plano de contas via planilha Excel diretamente para o banco de dados Firebird.",
-            cor_borda="#C8001E",
-            comando=self._abrir_importacao,
-            icone_path=self.resource_path("Icone_plano.jpg"),
-            icone_emoji="📑"
-        )
-        
-        # Card 2: Importar Clientes de NF-e
-        self._criar_card_modulo(
-            parent=cards_frame, row=0, col=1,
-            titulo="Clientes/Fornec. NF-e",
-            descricao="Importação automática de clientes e fornecedores via leitura de arquivos XML de Notas Fiscais (NF-e 4.00).",
-            cor_borda="#F39C12",
-            comando=self._abrir_nfe,
-            icone_path=self.resource_path("nfe_cli.jpg"),
-            icone_emoji="👥"
-        )
+        filtros_frame = tk.Frame(content, bg="#F0F0F0")
+        filtros_frame.pack(fill=tk.X, pady=(0, 15))
 
-        # Card 3: Faixas de ICMS
-        self._criar_card_modulo(
-            parent=cards_frame, row=0, col=2,
-            titulo="Faixas de ICMS",
-            descricao="Construção e auditoria das regras de ICMS por estado baseado no histórico de XMLs.",
-            cor_borda="#8E44AD", # Roxo para ICMS
-            comando=self._abrir_icms,
-            icone_path=None,
-            icone_emoji="🗺️"
-        )
+        self.filtro_botoes = {}
+        for f_texto, f_chave in [("📋 TODOS", "todos"), ("📊 EXCEL", "excel"), ("📄 XML", "xml")]:
+            btn = tk.Button(filtros_frame, text=f_texto,
+                            font=("Segoe UI", 10), bg="#E0E0E0", fg="#1A1A1A",
+                            relief=tk.FLAT, cursor="hand2", padx=20, pady=5,
+                            command=lambda f=f_chave: self._aplicar_filtro(f))
+            btn.pack(side=tk.LEFT, padx=3)
+            self.filtro_botoes[f_chave] = btn
 
-        # Card 4: Tributação NCM
-        self._criar_card_modulo(
-            parent=cards_frame, row=1, col=0,
-            titulo="Tributação por NCM",
-            descricao="Gestão de regras tributárias e alíquotas baseadas na Nomenclatura Comum do Mercosul.",
-            cor_borda="#2980B9", # Azul
-            comando=self._abrir_ncm,
-            icone_path=None,
-            icone_emoji="🏷️"
-        )
+        self.card_container = tk.Frame(content, bg="#F0F0F0")
+        self.card_container.pack(fill=tk.BOTH, expand=True)
 
-        # Card 5: Tributação CFOP
-        self._criar_card_modulo(
-            parent=cards_frame, row=1, col=1,
-            titulo="Tributação CFOP",
-            descricao="Definição de naturezas de operação e regras contábeis por CFOP.",
-            cor_borda="#D35400", # Laranja avermelhado
-            comando=self._abrir_cfop,
-            icone_path=None,
-            icone_emoji="🚚"
-        )
+        self.card_frames = {}
+        for categoria in ('todos', 'excel', 'xml'):
+            frame_cat = self._criar_grade_filtrada(self.card_container, categoria)
+            self.card_frames[categoria] = frame_cat
 
-        # Card 6: Validador XML - Produtos
-        self._criar_card_modulo(
-            parent=cards_frame, row=1, col=2,
-            titulo="Produtos & Consolidado",
-            descricao="Auditoria final por produto, cruzando NCM, CFOP e ICMS para cadastro e correção.",
-            cor_borda="#27AE60", # Verde
-            comando=self._abrir_xml_produtos,
-            icone_path=self.resource_path("xml_produtos.jpg"),
-            icone_emoji="📦"
-        )
-
-        # Card 7: Reforma Tributária
-        self._criar_card_modulo(
-            parent=cards_frame, row=2, col=0,
-            titulo="Reforma Tributária (RT)",
-            descricao="Construção e auditoria das regras de IBS e CBS baseadas nos XMLs.",
-            cor_borda="#F012BE", # Fuchsia/Magenta
-            comando=self._abrir_rt,
-            icone_path=None,
-            icone_emoji="🏛️"
-        )
-
-        # Card 8: Tabela de Preços XML
-        self._criar_card_modulo(
-            parent=cards_frame, row=2, col=1,
-            titulo="Lista de Preços XML",
-            descricao="Crie ou atualize Listas de Preços de Venda capturando automaticamente o valor unitário dos XMLs.",
-            cor_borda="#16A085", # Verde mar
-            comando=self._abrir_lista_precos,
-            icone_path=None,
-            icone_emoji="💲"
-        )
-
-        # Card 9: Auditoria Geral (Gerencial)
-        self._criar_card_modulo(
-            parent=cards_frame, row=2, col=2,
-            titulo="Visão Gerencial (Completa)",
-            descricao="Auditoria completa agrupando Produto, NCM, CFOP, ICMS, PIS/COF e RT com exportação.",
-            cor_borda="#34495E", # Azul Escuro
-            comando=self._abrir_auditoria_geral,
-            icone_path=None,
-            icone_emoji="📊"
-        )
-
-        # Card 10: Importar Produtos via Planilha
-        self._criar_card_modulo(
-            parent=cards_frame, row=3, col=0,
-            titulo="Importar Produtos (Excel)",
-            descricao="Importação e auto-cadastro de produtos, grupos e subgrupos via planilha (XLSX/CSV).",
-            cor_borda="#27AE60",
-            comando=self._abrir_importacao_planilha_produtos,
-            icone_path=None,
-            icone_emoji="📝"
-        )
-
-        # Card 11: Auditoria por Produto
-        self._criar_card_modulo(
-            parent=cards_frame, row=3, col=1,
-            titulo="Auditoria por Produto",
-            descricao="Auditoria cruzando todas as variações de tributação que um mesmo produto sofreu nos XMLs.",
-            cor_borda="#8E44AD",
-            comando=self._abrir_auditoria_produto,
-            icone_path=None,
-            icone_emoji="🔎"
-        )
-
-        # NOVO CARD: Pesquisa de Logs
-        self._criar_card_modulo(
-            parent=cards_frame, row=3, col=2,
-            titulo="Busca em Logs ERP",
-            descricao="Varredura avançada e rápida em arquivos .txt de log gerados pelo ERP.",
-            cor_borda="#F39C12",
-            comando=self._abrir_busca_logs,
-            icone_emoji="🕵️‍♂️"
-        )
+        self._aplicar_filtro('todos')
 
         # --- RODAPÉ ---
         bottom_frame = tk.Frame(self, bg="#F0F0F0")
@@ -280,12 +140,90 @@ class TelaInicial(tk.Frame):
         btn_fechar = tk.Button(bottom_frame, text="Sair do Sistema", font=("Segoe UI", 10), bg="#FFFFFF", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", padx=15, pady=5, command=self.parent.quit)
         btn_fechar.pack(side=tk.RIGHT)
 
+    def _criar_grade_filtrada(self, parent, filtro):
+        modulos = [
+            ("Plano de Contas", "Importação estruturada do plano de contas via planilha Excel diretamente para o banco de dados Firebird.",
+             "#C8001E", "_abrir_importacao", "Icone_plano.jpg", "📑", ("excel",)),
+            ("Clientes/Fornec. NF-e", "Importação automática de clientes e fornecedores via leitura de arquivos XML de Notas Fiscais (NF-e 4.00).",
+             "#F39C12", "_abrir_nfe", "nfe_cli.jpg", "👥", ("xml",)),
+            ("Faixas de ICMS", "Construção e auditoria das regras de ICMS por estado baseado no histórico de XMLs.",
+             "#8E44AD", "_abrir_icms", None, "🗺️", ("xml",)),
+            ("Tributação por NCM", "Gestão de regras tributárias e alíquotas baseadas na Nomenclatura Comum do Mercosul.",
+             "#2980B9", "_abrir_ncm", None, "🏷️", ("xml",)),
+            ("Tributação CFOP", "Definição de naturezas de operação e regras contábeis por CFOP.",
+             "#D35400", "_abrir_cfop", None, "🚚", ("xml",)),
+            ("Produtos & Consolidado", "Auditoria final por produto, cruzando NCM, CFOP e ICMS para cadastro e correção.",
+             "#27AE60", "_abrir_xml_produtos", "xml_produtos.jpg", "📦", ("xml",)),
+            ("Reforma Tributária (RT)", "Construção e auditoria das regras de IBS e CBS baseadas nos XMLs.",
+             "#F012BE", "_abrir_rt", None, "🏛️", ("xml",)),
+            ("Lista de Preços XML", "Crie ou atualize Listas de Preços de Venda capturando automaticamente o valor unitário dos XMLs.",
+             "#16A085", "_abrir_lista_precos", None, "💲", ("xml",)),
+            ("Visão Gerencial (Completa)", "Auditoria completa agrupando Produto, NCM, CFOP, ICMS, PIS/COF e RT com exportação.",
+             "#34495E", "_abrir_auditoria_geral", None, "📊", ("xml",)),
+            ("Importar Produtos (Excel)", "Importação e auto-cadastro de produtos, grupos e subgrupos via planilha (XLSX/CSV).",
+             "#27AE60", "_abrir_importacao_planilha_produtos", None, "📝", ("excel",)),
+            ("Auditoria por Produto", "Auditoria cruzando todas as variações de tributação que um mesmo produto sofreu nos XMLs.",
+             "#8E44AD", "_abrir_auditoria_produto", None, "🔎", ("xml",)),
+            ("Busca em Logs ERP", "Varredura avançada e rápida em arquivos .txt de log gerados pelo ERP.",
+             "#F39C12", "_abrir_busca_logs", None, "🕵️‍♂️", ()),
+            ("Importar Clientes (Excel)", "Importação de clientes com mapeamento de colunas via planilha (XLSX/CSV) para cadastro no ERP.",
+             "#003399", "_abrir_importacao_planilha_clientes", None, "👤", ("excel",)),
+            ("Importar Contas a Receber (Excel)", "Importação de títulos e parcelas de contas a receber com mapeamento de colunas via planilha (XLSX/CSV).",
+             "#E67E22", "_abrir_importacao_planilha_receber", None, "💰", ("excel",)),
+            ("Importar Contas a Pagar (Excel)", "Importação de títulos e parcelas de contas a pagar com mapeamento de colunas via planilha (XLSX/CSV).",
+             "#C0392B", "_abrir_importacao_planilha_pagar", None, "💳", ("excel",)),
+            ("Importar Lista de Preços (Excel)", "Importação de tabela de preços com mapeamento de colunas via planilha (XLSX/CSV) e validação contra o cadastro do ERP.",
+             "#E67E22", "_abrir_importacao_planilha_lista_precos", None, "📊", ("excel",)),
+            ("Importar Tributação (Excel)", "Importação completa de tributação por NCM via planilha: ICMS, PIS, COFINS e Reforma Tributária com criação de faixas e regras.",
+             "#F012BE", "_abrir_importacao_planilha_tributacao", None, "📋", ("excel",)),
+        ]
+
+        if filtro == 'todos':
+            selecionados = modulos
+        else:
+            selecionados = [m for m in modulos if filtro in m[6]]
+
+        frame = tk.Frame(parent, bg="#F0F0F0")
+
+        if not selecionados:
+            return frame
+
+        cols = 3
+        rows = (len(selecionados) + cols - 1) // cols
+
+        for i in range(cols):
+            frame.grid_columnconfigure(i, weight=1, uniform="col", minsize=280)
+        for i in range(rows):
+            frame.grid_rowconfigure(i, weight=1, uniform="row")
+
+        for idx, mod in enumerate(selecionados):
+            r = idx // cols
+            c = idx % cols
+            titulo, descricao, cor_borda, nome_comando, icone_path, icone_emoji, _ = mod
+            comando = getattr(self, nome_comando)
+            path = self.resource_path(icone_path) if icone_path else None
+            self._criar_card_modulo(frame, r, c, titulo, descricao, cor_borda, comando, path, icone_emoji)
+
+        return frame
+
+    def _aplicar_filtro(self, filtro):
+        for cat, frame in self.card_frames.items():
+            if cat == filtro:
+                frame.pack(fill=tk.BOTH, expand=True)
+            else:
+                frame.pack_forget()
+        for cat, btn in self.filtro_botoes.items():
+            if cat == filtro:
+                btn.config(bg="#003399", fg="white", font=("Segoe UI", 10, "bold"))
+            else:
+                btn.config(bg="#E0E0E0", fg="#1A1A1A", font=("Segoe UI", 10))
+
     def _criar_card_modulo(self, parent, row, col, titulo, descricao, cor_borda, comando, icone_path=None, icone_emoji="📦"):
         container = tk.Frame(parent, bg="#F0F0F0")
-        container.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+        container.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
         
         card = tk.Frame(container, bg="#FFFFFF", highlightbackground=cor_borda, highlightthickness=2, cursor="hand2")
-        card.pack(fill=tk.BOTH, expand=True, ipadx=15, ipady=15)
+        card.pack(fill=tk.BOTH, expand=True, ipadx=10, ipady=10)
         card.bind("<Button-1>", lambda e: comando())
         
         elementos_hover = [card]
@@ -360,7 +298,7 @@ class TelaInicial(tk.Frame):
             data_atual = datetime.datetime.now().strftime('%Y-%m-%d')
             nome_arquivo = f"acessos_modulos_{data_atual}.log"
             if os.path.exists(nome_arquivo):
-                os.startfile(nome_arquivo) # Abre nativamente no Bloco de Notas do Windows
+                os.startfile(os.path.normpath(nome_arquivo)) # Abre nativamente no Bloco de Notas do Windows
             else:
                 messagebox.showinfo("Logs", "Nenhum log registrado para o dia de hoje ainda.")
         except Exception as e:
@@ -535,6 +473,36 @@ class TelaInicial(tk.Frame):
                     self.cb_filial.current(selecionado_idx)
                     self._salvar_filial_selecionada(None)
         except Exception as e:
+            # Fallback: pergunta se deseja usar o banco descoberto automaticamente
+            if caminho_banco:
+                caminho_auto, servidor_auto, porta_auto, usuario_auto, senha_auto = self._auto_descobrir_banco()
+                if caminho_auto and caminho_auto != caminho_banco:
+                    resposta = messagebox.askyesno(
+                        "Banco não encontrado",
+                        f"O banco configurado não foi encontrado:\n{caminho_banco}\n\n"
+                        f"Foi detectado um banco em:\n{caminho_auto}\n\n"
+                        "Deseja usar este banco?",
+                        parent=self.parent
+                    )
+                    if resposta:
+                        try:
+                            config_auto = {
+                                'host': servidor_auto, 'port': porta_auto, 'database': caminho_auto,
+                                'user': usuario_auto, 'password': senha_auto,
+                                'fbclient': self.resource_path(config.get('FIREBIRD', 'fbclient', fallback='').strip()) or ''
+                            }
+                            with FirebirdService(config_auto) as _:
+                                config.set('FIREBIRD', 'servidor', servidor_auto)
+                                config.set('FIREBIRD', 'porta', porta_auto)
+                                config.set('FIREBIRD', 'caminho_banco', caminho_auto)
+                                config.set('FIREBIRD', 'usuario', usuario_auto)
+                                config.set('FIREBIRD', 'senha', senha_auto)
+                                with open('config.ini', 'w', encoding='utf-8') as f:
+                                    config.write(f)
+                                self.after(100, self._atualizar_status)
+                                return
+                        except Exception:
+                            pass
             print("Erro na auto-conexão da Tela Inicial:", e)
             self.lbl_status_db.config(text="🔴 Não Conectado", fg="#E74C3C")
             self.lbl_path_db.config(text="")
@@ -630,6 +598,41 @@ class TelaInicial(tk.Frame):
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaImportacaoPlanilhaProdutos(self.parent, callback_voltar=self._voltar_inicial)
 
+    def _abrir_importacao_planilha_clientes(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importa\u00e7\u00e3o de Clientes via Planilha - Implanta\u00e7\u00e3o Sistec")
+        self.nome_tela_atual = "Importa\u00e7\u00e3o de Clientes via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaClientes(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_receber(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importa\u00e7\u00e3o de Contas a Receber via Planilha - Implanta\u00e7\u00e3o Sistec")
+        self.nome_tela_atual = "Importa\u00e7\u00e3o de Contas a Receber via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaReceber(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_pagar(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importa\u00e7\u00e3o de Contas a Pagar via Planilha - Implanta\u00e7\u00e3o Sistec")
+        self.nome_tela_atual = "Importa\u00e7\u00e3o de Contas a Pagar via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaPagar(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_lista_precos(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Lista de Preços via Planilha - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Lista de Preços via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaListaPrecos(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_tributacao(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Tributação via Planilha - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Tributação via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaTributacao(self.parent, callback_voltar=self._voltar_inicial)
+
     def _abrir_auditoria_produto(self):
         self.pack_forget()
         self.winfo_toplevel().title("Auditoria por Produto - Implantação Sistec")
@@ -654,6 +657,3 @@ class TelaInicial(tk.Frame):
         self.winfo_toplevel().title("Implantação Sistec")
         self.pack(fill=tk.BOTH, expand=True) # Mostra a tela inicial de volta
 
-    def _em_desenvolvimento(self):
-        from tkinter import messagebox
-        messagebox.showinfo("Em Desenvolvimento", "Este módulo está sendo migrado do sistema antigo e estará disponível em breve!")
