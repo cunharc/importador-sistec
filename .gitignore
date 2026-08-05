@@ -39,3 +39,7 @@ Thumbs.db
 # Caches de analise (regerados a cada execucao)
 *.pkl
 conversa_claude
+
+# Config real do cliente (caminho do banco, CNPJ, pastas de rede). O modelo
+# versionado e o config.ini.exemplo.
+config.ini

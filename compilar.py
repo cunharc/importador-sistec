@@ -35,10 +35,17 @@ PyInstaller.__main__.run([
 
 arquivo_dist = os.path.join('dist', 'Importador_Sistec.exe')
 
-# Copia o arquivo config.ini (se você tiver um) para a pasta do cliente
-if os.path.exists('config.ini') and os.path.exists('dist'):
-    shutil.copy('config.ini', 'dist')
-    print("\n✅ config.ini copiado para a pasta dist.")
+# Copia o config.ini para a pasta do cliente. Se nao existir (clone novo), leva o
+# modelo com o nome final — o .exe nao vem com config embutido e sem o arquivo a
+# primeira abertura ficaria sem banco configurado.
+if os.path.exists('dist'):
+    if os.path.exists('config.ini'):
+        shutil.copy('config.ini', 'dist')
+        print("\n✅ config.ini copiado para a pasta dist.")
+    elif os.path.exists('config.ini.exemplo'):
+        shutil.copy('config.ini.exemplo', os.path.join('dist', 'config.ini'))
+        print("\n⚠ Nao havia config.ini: o modelo foi para dist/config.ini. "
+              "Configure o banco na primeira abertura.")
 
 print("-" * 50)
 print("🚀 COMPILAÇÃO E PREPARAÇÃO CONCLUÍDAS COM SUCESSO!")

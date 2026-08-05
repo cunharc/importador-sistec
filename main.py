@@ -6,6 +6,14 @@ if not hasattr(locale, 'resetlocale'):
 import tkinter as tk
 import os
 import sys
+
+# Antes de qualquer tela: sem config.ini o sistema abriria com tudo em branco e o
+# banco apontando para lugar nenhum. O arquivo real não fica no repositório (guarda
+# caminho do banco, CNPJ e pastas do cliente), então num clone novo ele é criado a
+# partir do config.ini.exemplo. Nunca sobrescreve um que já exista.
+from utils.config_inicial import garantir_config
+_caminho_cfg, _cfg_criado = garantir_config()
+
 from PIL import Image, ImageTk
 from tkinter import ttk
 from telas.tela_inicial import TelaInicial
@@ -14,6 +22,9 @@ from utils import tema
 from version import VERSAO, DATA_VERSAO
 
 _log = get_logger('main')
+if _cfg_criado:
+    _log.info(f"config.ini criado a partir do modelo em {_caminho_cfg} — "
+              f"configure o banco em Configurar Banco.")
 
 def resource_path(relative_path):
     """Obtém o caminho absoluto para os recursos, funcionando no dev e no PyInstaller"""

@@ -1,0 +1,229 @@
+; Modelo do config.ini. Copie este arquivo para "config.ini" e ajuste.
+;
+; O config.ini de verdade NÃO vai para o repositório (está no .gitignore): ele guarda
+; o caminho do banco do cliente, caminhos de rede internos, CNPJ e o último arquivo
+; aberto em cada tela. Este modelo existe para que um clone novo saiba quais chaves
+; existem sem publicar nada disso.
+;
+; As telas gravam as próprias preferências aqui sozinhas (último arquivo, aba, mapa de
+; colunas, centro de custo...), então não é preciso preencher tudo à mão: o mínimo é a
+; seção [FIREBIRD]. Se o config.ini não existir, o sistema cria um a partir deste
+; modelo na primeira execução.
+
+[FIREBIRD]
+; Caminho do .FDB como o servidor Firebird o vê (barras normais funcionam no Windows)
+caminho_banco = C:/CAMINHO/DO/BANCO.FDB
+usuario = SYSDBA
+senha = masterkey
+; A DLL cliente fica ao lado do executável; o nome muda com a versão do Firebird
+fbclient = fbclient_5.dll
+servidor = localhost
+; 3050 é o padrão do Firebird; instalações do ERP costumam usar 3052
+porta = 3050
+
+[IMPORTACAO]
+empresa = 1
+filial = 1
+exercicio = 2026
+coluna_conta = a
+coluna_descricao = b
+linha_inicial = 2
+nivel_sintetico = 4
+arquivo_excel =
+aba_excel =
+limpar_banco = False
+uf =
+
+[NFE]
+empresa = 1
+filial = 1
+
+; --- As seções abaixo são preenchidas pelas telas conforme o uso. -------------
+; map_* / mapa_* são LETRAS de coluna da planilha (A, B, ..., AX). Vazio = a tela
+; ignora aquele campo.
+
+[IMPORTACAO_CLIENTES]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+map_documento =
+map_razao =
+map_fantasia =
+map_ie =
+map_endereco =
+map_numero =
+map_bairro =
+map_cidade_nome =
+map_uf =
+map_cep =
+map_fone1 =
+map_fone2 =
+map_email =
+map_email_nfe =
+map_vendedor_nome =
+map_tipo =
+map_complemento =
+map_flag_cliente =
+map_flag_fornecedor =
+map_flag_outros =
+map_cf_codigo =
+map_limite_credito =
+map_ativo =
+
+[IMPORTACAO_RECEBER]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+map_numero_doc =
+map_parcela =
+map_documento =
+map_razao =
+map_valor =
+map_valor_recebido =
+map_valor_a_receber =
+map_emissao =
+map_vencimento =
+map_data_registro =
+map_data_recebimento =
+map_desconto =
+map_juros =
+map_serie =
+map_boleto =
+map_observacao =
+map_situacao_status =
+local_cobranca =
+; centro de custo e conta contábil do rateio do título; "(nenhum)" = sem rateio
+centro_custo = (nenhum)
+conta_contabil = (nenhuma)
+
+[IMPORTACAO_PAGAR]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+map_numero_doc =
+map_parcela =
+map_documento =
+map_razao =
+map_valor =
+map_valor_recebido =
+map_valor_a_pagar =
+map_emissao =
+map_vencimento =
+map_data_registro =
+map_data_recebimento =
+map_desconto =
+map_juros =
+map_serie =
+map_boleto =
+map_observacao =
+map_situacao_status =
+local_cobranca =
+centro_custo = (nenhum)
+conta_contabil = (nenhuma)
+
+[IMPORTACAO_LISTA_PRECO]
+mapa_codigo =
+mapa_descricao =
+mapa_preco =
+mapa_ncm =
+mapa_ean =
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+; NOVA cria uma lista; EXISTENTE grava na lista escolhida
+modo = NOVA
+lista_selecionada =
+nova_lista_codigo =
+nova_lista_descricao =
+
+[IMPORTACAO_PRODUTOS]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+tipo =
+producao_sistec = N
+; xml = usa o código do XML quando ele é numérico; sequencial = sempre o próximo livre
+modo_codigo = xml
+copiar_cod_import = S
+mapa_codigo_antigo =
+mapa_codigo_atual =
+mapa_descricao =
+mapa_grupo =
+mapa_subgrupo =
+mapa_ncm =
+mapa_ean =
+mapa_unidade =
+mapa_tipo =
+mapa_tipo_prod_producao =
+
+[IMPORTACAO_TRIBUTACAO]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+map_ncm =
+map_descricao =
+map_icms_uf =
+map_icms_cst =
+map_icms_aliquota =
+map_icms_reducao =
+map_pis_cst =
+map_pis_pct =
+map_cofins_cst =
+map_cofins_pct =
+map_rt_class =
+map_rt_cst =
+map_ibs_pct =
+map_cbs_pct =
+
+[IMPORTACAO_ESTOQUE_PRODUCAO]
+ultimo_arquivo =
+ultima_aba =
+linha_inicial = 2
+map_etiqueta =
+map_produto =
+map_descricao =
+map_peso =
+map_peso_bruto =
+map_qtde =
+map_tara_emb =
+map_tara_caixa =
+map_data_hora =
+map_validade =
+map_producao =
+empresa = 1
+filial = 1
+cod_status = P
+observacao =
+usuario_pesagem =
+cliente_estoque =
+uma_ordem = S
+busca_produto = auto
+
+[IMPORTACAO_NFE]
+ultima_pasta =
+; CNPJ da empresa que emitiu os XMLs — é ele que separa nota própria de terceiros.
+; O cadastro da filial no ERP tem a palavra final sobre este valor.
+cnpj_empresa =
+empresa = 1
+filial = 1
+gerar_financeiro = S
+; NAT_FLUXO_CAIXA e NAT_CONTABILIDADE das naturezas usadas na importação. Com fluxo
+; de caixa em S, o faturamento do ERP (CONFAT) gera o título ao passar pela nota —
+; para cliente cujo financeiro veio por planilha, deixe N.
+nat_fluxo_caixa = S
+nat_contabilidade = S
+local_cobranca =
+vendedor_padrao =
+; Só saídas | Só entradas | Saídas + Entradas — cada escopo tem o seu rateio
+escopo = Só saídas
+centro_custo_saida = (nenhum)
+conta_contabil_saida = (nenhuma)
+centro_custo_entrada = (nenhum)
+conta_contabil_entrada = (nenhuma)
+; Cliente | Fornecedor | Cliente e Fornecedor | Outros | Automático (pela nota)
+tipo_cadastro_cf = Automático (pela nota)
+
+[ATUALIZACAO]
+; Versão que o usuário mandou não avisar mais (o botão "Não avisar desta versão").
+; A versão seguinte volta a avisar.
+versao_ignorada =
