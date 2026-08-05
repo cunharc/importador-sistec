@@ -207,6 +207,79 @@ def notas_da_versao(versao):
     return f"### Versão {versao} — {DATA_VERSAO}\n\n{texto}"
 
 
+def subir_versao(nova, data=None):
+    """Escreve a versão e a data no version.py e no cabeçalho do VERSION.md.
+
+    Existir para não haver dois lugares para esquecer: publicar com o `version.py`
+    numa versão e o `VERSION.md` noutra faz o cliente ler as notas erradas.
+    Devolve a data usada. Não commita — quem revisa é você.
+    """
+    if not re.fullmatch(r'\d+(\.\d+)*', nova):
+        erro(f"'{nova}' não é uma versão. Use algo como 5.0 ou 5.0.1.")
+    data = data or __import__('datetime').date.today().strftime('%d/%m/%Y')
+
+    caminho = os.path.join(RAIZ, 'version.py')
+    with open(caminho, encoding='utf-8') as f:
+        txt = f.read()
+    txt, n1 = re.subn(r'^VERSAO = ".*?"$', f'VERSAO = "{nova}"', txt, count=1, flags=re.M)
+    txt, n2 = re.subn(r'^DATA_VERSAO = ".*?"$', f'DATA_VERSAO = "{data}"', txt,
+                      count=1, flags=re.M)
+    if not (n1 and n2):
+        erro("Não achei VERSAO/DATA_VERSAO no version.py para substituir.")
+    with open(caminho, 'w', encoding='utf-8') as f:
+        f.write(txt)
+    print(f"  ✔ version.py -> {nova} ({data})")
+
+    atualizar_version_md(nova, data)
+    return data
+
+
+def atualizar_version_md(nova, data):
+    """No VERSION.md: atualiza o quadro do topo, rebaixa a versão que era a atual e
+    abre a seção da nova, vazia, para as notas serem escritas."""
+    caminho = os.path.join(RAIZ, 'VERSION.md')
+    if not os.path.isfile(caminho):
+        return
+    with open(caminho, encoding='utf-8') as f:
+        md = f.read()
+
+    # Quadro do topo: mantém a largura, senão as bordas │ desalinham
+    def trocar_quadro(m):
+        antes, versao, depois = m.group(1), m.group(2), m.group(3)
+        sobra = len(versao) - len(nova)
+        if sobra > 0:
+            depois = depois + ' ' * sobra
+        elif sobra < 0:
+            depois = depois[:sobra] or ' '
+        return f"{antes}{nova}{depois}"
+
+    md = re.sub(r'(VERSÃO\s+)(\d+(?:\.\d+)*)(\s+│)', trocar_quadro, md, count=1)
+    md = re.sub(r'(Data:\s*)\d{2}/\d{2}/\d{4}', rf'\g<1>{data}', md, count=1)
+
+    # a que era "RELEASE ATUAL" deixa de ser, e a nova entra no lugar dela
+    padrao = re.compile(r'^###\s*✅\s*VERSÃO\s+(\d+(?:\.\d+)*)\s*-\s*RELEASE ATUAL\s*'
+                        r'\(([^)]*)\)\s*$', re.M)
+    m = padrao.search(md)
+    nova_secao = (f"### ✅ VERSÃO {nova} - RELEASE ATUAL ({data})\n\n"
+                  f"| Módulo                     | Status    | Descrição"
+                  f"                                    |\n"
+                  f"|----------------------------|-----------|"
+                  f"----------------------------------------------|\n")
+    if m:
+        antiga = f"### ✅ VERSÃO {m.group(1)} ({m.group(2)})"
+        md = md[:m.start()] + nova_secao + "\n" + antiga + md[m.end():]
+    else:
+        # sem marcador de release atual, insere antes da primeira seção de versão
+        primeira = re.search(r'^###\s', md, re.M)
+        pos = primeira.start() if primeira else len(md)
+        md = md[:pos] + nova_secao + "\n" + md[pos:]
+
+    with open(caminho, 'w', encoding='utf-8') as f:
+        f.write(md)
+    print(f"  ✔ VERSION.md: seção da {nova} aberta (a tabela está vazia — "
+          f"escreva o que mudou antes de publicar)")
+
+
 def conferir_tag(tag):
     r = rodar(['git', 'tag', '-l', tag])
     if r.stdout.strip():
@@ -317,7 +390,20 @@ def main():
     p.add_argument('--token', help="token do GitHub (senão usa GITHUB_TOKEN ou .github_token)")
     p.add_argument('--so-empacotar', action='store_true',
                    help="compila e gera o zip, sem tocar no git nem no GitHub")
+    p.add_argument('--versao', metavar='X.Y',
+                   help="sobe version.py e o cabeçalho do VERSION.md para esta versão "
+                        "e para, para você escrever as notas antes de publicar")
+    p.add_argument('--data', metavar='DD/MM/AAAA',
+                   help="data da versão (padrão: hoje); só com --versao")
     args = p.parse_args()
+
+    if args.versao:
+        passo(f"Subindo a versão para {args.versao}")
+        data = subir_versao(args.versao, args.data)
+        print(f"\n✅ Versão {args.versao} ({data}) marcada nos arquivos.\n"
+              f"   Agora: escreva as notas no VERSION.md, commite, e rode\n"
+              f"   .venv/Scripts/python.exe publicar.py")
+        return
 
     versao = str(VERSAO).strip()
     tag = f"v{versao}"
