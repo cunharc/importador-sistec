@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[('fbclient_*.dll', '.')],
-    datas=[('icon.ico', '.'), ('sistec.jpg', '.'), ('Icone_plano.jpg', '.'), ('nfe_cli.jpg', '.'), ('ncm_governo.json', '.'), ('cfop_governo.json', '.'), ('config_modulos_log.json', '.')],
+    datas=[('icon.ico', '.'), ('sistec.jpg', '.'), ('Icone_plano.jpg', '.'), ('nfe_cli.jpg', '.'), ('Logo oficial grupos - Sistec.png', '.'), ('ncm_governo.json', '.'), ('cfop_governo.json', '.'), ('config_modulos_log.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

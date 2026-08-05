@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "4.1"
-DATA_VERSAO = "29/06/2026"
+VERSAO = "4.9"
+DATA_VERSAO = "05/08/2026"
 
 MODULOS = {
+    "Notas Fiscais (XML)": {
+        "status": "pronto",
+        "descricao": "Importa notas de emissao propria (entrada e saida) dos XMLs, validando cliente, natureza de operacao e produto"
+    },
     "Plano de Contas": {
         "status": "pronto",
         "descricao": "Importação de plano de contas"
@@ -76,6 +80,18 @@ MODULOS = {
     "Auditoria por Produto": {
         "status": "pronto",
         "descricao": "Auditoria tributária por produto"
+    },
+    "Duplicar/Configurar Empresa": {
+        "status": "pronto",
+        "descricao": "Clona empresa/filial (EMPRESA, PARAM, FILIAL, CONFIG NF-e), edita campo a campo e ajusta configs em lote (NF-e/pedidos/títulos) comparando com uma empresa de referência"
+    },
+    "Vínculo CC x Plano de Contas": {
+        "status": "pronto",
+        "descricao": "Vincula centros de custo às contas do plano (contabilização automática) em massa, com árvore de CC e busca do plano"
+    },
+    "Importação Estoque de Produção": {
+        "status": "ajustes",
+        "descricao": "Importa estoque de Produto Acabado por etiquetas via planilha, gerando Ordem de Desossa de inventário, itens PA e as pesagens"
     }
 }
 

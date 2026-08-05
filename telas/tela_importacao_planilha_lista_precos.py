@@ -8,6 +8,7 @@ import datetime
 
 from utils.excel_reader import obter_abas_planilha, ler_planilha_produtos
 from utils.firebird_service import FirebirdService
+from utils import tema
 
 
 class DropdownListbox(tk.Frame):
@@ -84,7 +85,7 @@ class DropdownListbox(tk.Frame):
         self.entry.config(state=state)
 
 CAMPOS_DISPONIVEIS = [
-    ("C\u00f3digo Produto *", "codigo", True),
+    ("C\u00f3digo (produto/import./aux.) *", "codigo", True),
     ("Descri\u00e7\u00e3o", "descricao", False),
     ("Pre\u00e7o *", "preco", True),
     ("NCM", "ncm", False),
@@ -122,12 +123,44 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         self.after(500, lambda: self._carregar_listas_existentes(rotulo_salvo))
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="IMPORTA\u00c7\u00c3O DE LISTA DE PRE\u00c7OS VIA PLANILHA (Excel/CSV)",
-                             font=("Segoe UI", 14, "bold"), fg="#E67E22")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do m\u00f3dulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Importar Lista de Pre\u00e7os (Excel)",
+            "Importa\u00e7\u00e3o de tabela de pre\u00e7os via planilha (XLSX/CSV) com valida\u00e7\u00e3o contra o ERP"
+        ).pack(fill=tk.X)
+
+        # ===================== CORPO: menu lateral + conte\u00fado =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padr\u00e3o do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodap\u00e9 do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "\u238b   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "A\u00c7\u00d5ES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "\U0001f50d   Carregar e Analisar Planilha", self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_exportar = tema.botao_sidebar(sidebar, "\U0001f4e4   Exportar por Status", self._exportar_por_status)
+        self.btn_exportar.config(state=tk.DISABLED)
+        self.btn_exportar.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "\U0001f680   Injetar Pre\u00e7os no ERP", self._iniciar_importacao, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        # -------- CONTE\u00daDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
 
         # === CONFIG LISTA ===
-        frame_lista = ttk.LabelFrame(self, text="Configura\u00e7\u00e3o da Lista de Pre\u00e7os", padding="10")
+        frame_lista = ttk.LabelFrame(content, text="Configura\u00e7\u00e3o da Lista de Pre\u00e7os", padding="10")
         frame_lista.pack(fill=tk.X, pady=5)
 
         self.var_modo = tk.StringVar(self, value="EXISTENTE")
@@ -150,7 +183,7 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         self.ent_desc_lista.grid(row=1, column=4, sticky=tk.W, padx=5)
 
         # === FILE SELECTION ===
-        file_row = ttk.Frame(self)
+        file_row = ttk.Frame(content)
         file_row.pack(fill=tk.X, pady=5)
 
         tk.Label(file_row, text="Arquivo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -168,7 +201,7 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         self.ent_linha_ini.pack(side=tk.LEFT, padx=2)
 
         # === COLUMN MAPPING ===
-        frame_map = ttk.LabelFrame(self, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
+        frame_map = ttk.LabelFrame(content, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
         frame_map.pack(fill=tk.X, pady=4)
 
         self.entradas_map = {}
@@ -181,21 +214,15 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
 
         self._carregar_config_mapeamento()
 
-        # === ACTIONS ===
-        actions_row = ttk.Frame(self)
+        # === ACTIONS (inline: sele\u00e7\u00e3o/dicas/progresso) ===
+        actions_row = ttk.Frame(content)
         actions_row.pack(fill=tk.X, pady=4)
-
-        self.btn_analisar = tk.Button(actions_row, text="\U0001f50d Carregar e Analisar Planilha",
-                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
-                                       cursor="hand2", padx=12, pady=1,
-                                       command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.LEFT, padx=5)
 
         ttk.Button(actions_row, text="\u2611 Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="\u2610 Desmarcar", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
 
         ttk.Label(actions_row, text="\U0001f4a1 Duplo clique no PRE\u00c7O para editar manualmente",
-                  foreground="#003399", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=10)
+                  foreground="#14146E", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=10)
 
         self.progresso = ttk.Progressbar(actions_row, orient=tk.HORIZONTAL, mode='determinate', length=120)
         self.progresso.pack(side=tk.LEFT, padx=8)
@@ -207,7 +234,7 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         self.colunas = ("SEL", "STATUS", "C\u00d3D. PLANILHA", "DESCR. PLANILHA", "C\u00d3D. ERP", "DESCR. ERP", "PRE\u00c7O")
         self._sort_directions = {col: False for col in self.colunas}
 
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
@@ -227,26 +254,6 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # === FOOTER ===
-        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
-        footer.pack(fill=tk.X, pady=(4, 0))
-
-        tk.Button(footer, text="\u2b05 VOLTAR", command=self._fechar_tela,
-                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
-                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
-
-        self.btn_exportar = tk.Button(footer, text="\U0001f4e4 Exportar por Status", state=tk.DISABLED,
-                                       font=("Segoe UI", 9, "bold"), bg="#8E44AD", fg="white",
-                                       cursor="hand2", padx=12, pady=2,
-                                       command=self._exportar_por_status)
-        self.btn_exportar.pack(side=tk.LEFT, padx=5)
-
-        self.btn_importar = tk.Button(footer, text="\U0001f680 Injetar Pre\u00e7os no ERP", state=tk.DISABLED,
-                                       font=("Segoe UI", 9, "bold"), bg="#27AE60", fg="white",
-                                       cursor="hand2", padx=14, pady=2,
-                                       command=self._iniciar_importacao)
-        self.btn_importar.pack(side=tk.RIGHT, padx=3)
 
     # ==================== HELPERS ====================
 
@@ -488,23 +495,29 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
             emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
             fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
 
-            produtos_erp = {}
+            # Mapas separados por tipo de código, para casar por prioridade
+            # e mostrar POR QUAL campo o produto foi encontrado.
+            map_codigo, map_import, map_aux, map_cbarra, map_desc = {}, {}, {}, {}, {}
             try:
                 with FirebirdService(self.config_db) as fb:
                     rows = fb.query(
-                        "SELECT PRODUTO_CODIGO, PRODUTO_COD_AUXILIAR, PRODUTO_DESCRICAO, PRODUTO_CBARRA "
+                        "SELECT PRODUTO_CODIGO, PRODUTO_COD_IMPORTACAO, PRODUTO_COD_AUXILIAR, "
+                        "PRODUTO_DESCRICAO, PRODUTO_CBARRA "
                         "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?",
                         [emp, fil]
                     )
                     for row in rows:
-                        cod = str(row.get('produto_codigo', '')).strip()
-                        aux = str(row.get('produto_cod_auxiliar', '')).strip()
-                        desc = str(row.get('produto_descricao', '')).strip()
-                        cb = str(row.get('produto_cbarra', '')).strip()
+                        cod = str(row.get('produto_codigo', '') or '').strip()
+                        imp = str(row.get('produto_cod_importacao', '') or '').strip()
+                        aux = str(row.get('produto_cod_auxiliar', '') or '').strip()
+                        desc = str(row.get('produto_descricao', '') or '').strip()
+                        cb = str(row.get('produto_cbarra', '') or '').strip()
                         info = {'codigo': cod, 'descricao': desc}
-                        if cod: produtos_erp[cod] = info
-                        if aux: produtos_erp[aux] = info
-                        if cb:  produtos_erp[cb] = info
+                        if cod: map_codigo.setdefault(cod, info)
+                        if imp: map_import.setdefault(imp, info)
+                        if aux: map_aux.setdefault(aux, info)
+                        if cb:  map_cbarra.setdefault(cb, info)
+                        if desc: map_desc.setdefault(desc.lower(), info)
             except Exception as e:
                 self.parent.after(0, lambda err=e: messagebox.showwarning("Erro DB", f"Falha ao consultar ERP:\n{err}"))
                 self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
@@ -515,17 +528,22 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
 
             self.dados_analisados = []
             total = len(self.registros_lidos)
-            desc_cache = {k: v['descricao'].lower() for k, v in produtos_erp.items()}
 
             def match_produto(cod_planilha, desc_planilha):
-                info = produtos_erp.get(cod_planilha)
-                if info:
-                    return 'OK', cod_planilha, info
+                # Prioridade: código -> importação -> auxiliar -> cód. barras -> descrição exata
+                for label, mapa in (
+                    ("OK (código)", map_codigo),
+                    ("OK (cód. importação)", map_import),
+                    ("OK (cód. auxiliar)", map_aux),
+                    ("OK (cód. barras)", map_cbarra),
+                ):
+                    info = mapa.get(cod_planilha)
+                    if info:
+                        return label, info['codigo'], info
                 if desc_planilha:
-                    dl = desc_planilha.lower()
-                    for p_cod, p_info in produtos_erp.items():
-                        if dl in desc_cache.get(p_cod, '') or desc_cache.get(p_cod, '') in dl:
-                            return "OK (~desc)", p_cod, p_info
+                    info = map_desc.get(desc_planilha.lower())
+                    if info:
+                        return "OK (~desc)", info['codigo'], info
                 return None, None, None
 
             for idx, reg in enumerate(self.registros_lidos):
@@ -571,6 +589,13 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_preview(self):
+        # Selo deste render. A grade e preenchida em blocos com after(), entao um
+        # render antigo pode continuar inserindo DEPOIS que outro limpou a tela —
+        # a grade acumula duas analises e os totais somam tudo. O selo faz os
+        # blocos do render antigo pararem.
+        self._render_seq = getattr(self, '_render_seq', 0) + 1
+        meu_seq = self._render_seq
+
         total = len(self.dados_analisados)
         if total == 0:
             self.btn_analisar.config(state=tk.NORMAL)
@@ -583,6 +608,8 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
         chunk_size = 30
 
         def render_chunk(start_idx):
+            if meu_seq != self._render_seq:
+                return  # um render mais novo assumiu a grade
             end_idx = min(start_idx + chunk_size, total)
             dados = self.dados_analisados
             for i in range(start_idx, end_idx):
@@ -623,9 +650,9 @@ class TelaImportacaoPlanilhaListaPrecos(ttk.Frame):
             return
 
         dados = self.dados_analisados
-        ok_exato = [d for d in dados if d['status'] == 'OK']
+        nao_encontrados = [d for d in dados if d['tag'] == 'ERRO']
         ok_desc = [d for d in dados if d['status'] == "OK (~desc)"]
-        nao_encontrados = [d for d in dados if d['status'] == "N\u00c3O ENCONTRADO"]
+        ok_exato = [d for d in dados if d['tag'] == 'OK' and d['status'] != "OK (~desc)"]
 
         linhas = []
         linhas.append("=" * 80)

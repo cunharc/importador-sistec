@@ -8,6 +8,7 @@ from utils.excel_reader import obter_abas_planilha, ler_planilha_produtos
 from utils.firebird_service import FirebirdService
 from utils.transformer import DataTransformer
 from utils.importer import FirebirdImporter
+from utils import tema
 
 class TelaImportacaoPlanilhaProdutos(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
@@ -37,13 +38,41 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
 
     def _criar_widgets(self):
         # === HEADER ===
-        header = tk.Frame(self, bg="#27AE60", padx=15, pady=8)
-        header.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(header, text="IMPORTAÇÃO DE PRODUTOS VIA PLANILHA (Excel/CSV)",
-                 font=("Segoe UI", 14, "bold"), bg="#27AE60", fg="white").pack(anchor=tk.W)
+        tema.montar_header(
+            self, "Importar Produtos (Excel)",
+            "Importação e auto-cadastro de produtos, grupos e subgrupos via planilha (XLSX/CSV)"
+        ).pack(fill=tk.X)
+
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Carregar e Analisar Planilha",
+                                               self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Processar e Injetar no ERP",
+                                               self._iniciar_importacao, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
 
         # === FILE SELECTION ROW ===
-        file_row = ttk.Frame(self)
+        file_row = ttk.Frame(content)
         file_row.pack(fill=tk.X, pady=2)
 
         tk.Label(file_row, text="Arquivo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -61,7 +90,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         self.ent_linha_ini.pack(side=tk.LEFT, padx=2)
 
         # === CONFIG ROW ===
-        config_row = ttk.Frame(self)
+        config_row = ttk.Frame(content)
         config_row.pack(fill=tk.X, pady=2)
 
         tk.Label(config_row, text="Tipo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -76,6 +105,10 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         self.var_producao = tk.BooleanVar(self, value=False)
         ttk.Checkbutton(config_row, text="Produção Sistec", variable=self.var_producao).pack(side=tk.LEFT, padx=10)
 
+        self.var_copiar_cod_import = tk.BooleanVar(self, value=False)
+        ttk.Checkbutton(config_row, text="Cód. antigo → Auxiliar + Importação",
+                        variable=self.var_copiar_cod_import).pack(side=tk.LEFT, padx=10)
+
         ttk.Separator(config_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
 
         tk.Label(config_row, text="Código:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -84,36 +117,39 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         ttk.Radiobutton(config_row, text="Sequencial", variable=self.var_modo_codigo, value="sequencial").pack(side=tk.LEFT, padx=2)
 
         # === COLUMN MAPPING ===
-        frame_map = ttk.LabelFrame(self, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
-        frame_map.pack(fill=tk.X, pady=4)
+        self.frame_map = ttk.LabelFrame(content, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
+        self.frame_map.pack(fill=tk.X, pady=4)
+        frame_map = self.frame_map
 
         labels_map = [
             ("Código Antigo:", "codigo_antigo"),
+            ("Código Atual:", "codigo_atual"),
             ("Descrição *:", "descricao"),
             ("Grupo:", "grupo"),
             ("Subgrupo:", "subgrupo"),
             ("NCM:", "ncm"),
             ("Cód. Barras:", "ean"),
             ("Unidade:", "unidade"),
+            ("Tipo:", "tipo"),
+            ("Tipo Prod. Produção:", "tipo_prod_producao"),
         ]
 
         self.entradas_map = {}
-        for i, (lbl_texto, chave) in enumerate(labels_map):
-            col = i * 2
-            tk.Label(frame_map, text=lbl_texto, font=("Segoe UI", 8, "bold")).grid(row=0, column=col, padx=(5, 1), pady=4, sticky=tk.E)
+        self._map_widgets = []   # (label, entry) para o rearranjo responsivo
+        for lbl_texto, chave in labels_map:
+            lbl = tk.Label(frame_map, text=lbl_texto, font=("Segoe UI", 8, "bold"))
             ent = ttk.Entry(frame_map, width=5, font=("Segoe UI", 9))
-            ent.grid(row=0, column=col + 1, padx=(0, 8), pady=4, sticky=tk.W)
             self.entradas_map[chave] = ent
+            self._map_widgets.append((lbl, ent))
+
+        self._map_por_linha = 0
+        self._reorganizar_mapa(por_linha=4)  # layout inicial
+        # Recalcula quantos campos cabem por linha conforme a largura (tela pequena → quebra)
+        self.frame_map.bind("<Configure>", self._on_map_resize)
 
         # === ACTIONS + PROGRESS ===
-        actions_row = ttk.Frame(self)
+        actions_row = ttk.Frame(content)
         actions_row.pack(fill=tk.X, pady=4)
-
-        self.btn_analisar = tk.Button(actions_row, text="🔍 Carregar e Analisar Planilha",
-                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
-                                       cursor="hand2", padx=12, pady=1,
-                                       command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.LEFT, padx=5)
 
         ttk.Button(actions_row, text="☑ Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="☐ Desmarcar", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
@@ -129,23 +165,23 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         self.lbl_status.pack(side=tk.LEFT, padx=2)
 
         # === TREEVIEW ===
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
-        self.colunas = ("SEL", "AÇÃO", "STATUS", "CÓDIGO ANTIGO", "DESCRIÇÃO", "TIPO", "GRUPO", "SUBGRUPO", "NCM", "EAN", "UNID")
+        self.colunas = ("SEL", "AÇÃO", "STATUS", "CÓDIGO ANTIGO", "DESCRIÇÃO", "TIPO", "GRUPO", "SUBGRUPO", "NCM", "EAN", "UNID", "CÓD. ATUAL")
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
 
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
-        larguras = [40, 100, 100, 100, 250, 120, 120, 120, 80, 100, 60]
+        larguras = [40, 100, 100, 100, 250, 120, 120, 120, 80, 100, 60, 100]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col)
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
 
-        self.tree.tag_configure('ERRO', background='#FADBD8')
-        self.tree.tag_configure('OK', background='#EAFAF1')
-        self.tree.tag_configure('NOVO', background='#D6EAF8')
-        self.tree.tag_configure('DIVERGENTE', background='#FEF9E7')
+        self.tree.tag_configure('ERRO', background=tema.ERROR_CT)
+        self.tree.tag_configure('OK', background=tema.SUCCESS_CT)
+        self.tree.tag_configure('NOVO', background=tema.INFO_CT)
+        self.tree.tag_configure('DIVERGENTE', background=tema.WARNING_CT)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
@@ -153,7 +189,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
         # === FILTER BAR ===
-        filter_frame = ttk.Frame(self)
+        filter_frame = ttk.Frame(content)
         filter_frame.pack(fill=tk.X, pady=(2, 4))
 
         tk.Label(filter_frame, text="Filtrar Status:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 5))
@@ -166,19 +202,23 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         self.lbl_filtro_info = tk.Label(filter_frame, text="", font=("Segoe UI", 8), fg="#555")
         self.lbl_filtro_info.pack(side=tk.LEFT, padx=10)
 
-        # === FOOTER ===
-        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
-        footer.pack(fill=tk.X, pady=(4, 0))
+    def _reorganizar_mapa(self, por_linha):
+        """Reposiciona os campos de mapeamento em N por linha (quebra em tela estreita)."""
+        por_linha = max(1, int(por_linha))
+        if por_linha == self._map_por_linha:
+            return
+        self._map_por_linha = por_linha
+        for i, (lbl, ent) in enumerate(self._map_widgets):
+            linha = i // por_linha
+            col = (i % por_linha) * 2
+            lbl.grid(row=linha, column=col, padx=(5, 1), pady=4, sticky=tk.E)
+            ent.grid(row=linha, column=col + 1, padx=(0, 8), pady=4, sticky=tk.W)
 
-        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
-                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
-                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
-
-        self.btn_importar = tk.Button(footer, text="🚀 Processar e Injetar no ERP", state=tk.DISABLED,
-                                       font=("Segoe UI", 9, "bold"), bg="#27AE60", fg="white",
-                                       cursor="hand2", padx=14, pady=2,
-                                       command=self._iniciar_importacao)
-        self.btn_importar.pack(side=tk.RIGHT, padx=3)
+    def _on_map_resize(self, event):
+        """Recalcula quantos campos cabem por linha conforme a largura disponível."""
+        total = len(self._map_widgets)
+        por_linha = max(1, min(total, event.width // 150))  # ~150px por campo
+        self._reorganizar_mapa(por_linha)
 
     def _selecionar_arquivo(self):
         path = filedialog.askopenfilename(filetypes=[("Arquivos Suportados", "*.xlsx *.csv"), ("Excel", "*.xlsx"), ("CSV", "*.csv")])
@@ -199,6 +239,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             'tipo': self.cb_tipo.get(),
             'producao_sistec': 'S' if self.var_producao.get() else 'N',
             'modo_codigo': self.var_modo_codigo.get(),
+            'copiar_cod_import': 'S' if self.var_copiar_cod_import.get() else 'N',
         }
         for chave, ent in self.entradas_map.items():
             self.config['IMPORTACAO_PRODUTOS'][f'mapa_{chave}'] = ent.get().strip()
@@ -227,6 +268,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 self.cb_tipo.set(tipo)
             self.var_producao.set(cfg.get('producao_sistec', 'N') == 'S')
             self.var_modo_codigo.set(cfg.get('modo_codigo', 'xml'))
+            self.var_copiar_cod_import.set(cfg.get('copiar_cod_import', 'N') == 'S')
             for chave, ent in self.entradas_map.items():
                 val = cfg.get(f'mapa_{chave}', '')
                 if val:
@@ -274,6 +316,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
 
             produtos_erp = {}
+            codigos_pk_erp = set()   # só PRODUTO_CODIGO (a PK) — sem os auxiliares
             try:
                 with FirebirdService(self.config_db) as fb:
                     rows = fb.query(
@@ -286,7 +329,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                         aux = str(row.get('produto_cod_auxiliar', '')).strip()
                         desc = str(row.get('produto_descricao', '')).strip()
                         info = {'codigo': cod, 'descricao': desc}
-                        if cod: produtos_erp[cod] = info
+                        if cod:
+                            produtos_erp[cod] = info
+                            codigos_pk_erp.add(cod)
                         if aux: produtos_erp[aux] = info
             except Exception as e:
                 self.parent.after(0, lambda err=e: messagebox.showwarning("Erro DB", f"Falha ao consultar ERP:\n{err}"))
@@ -298,6 +343,10 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
 
             self.dados_analisados = []
             total = len(self.registros_lidos)
+            # "Código Atual" vira o PRODUTO_CODIGO (a PK). Precisa ser conferido
+            # aqui: se colidir com o ERP ou repetir na planilha, o INSERT morre
+            # com SQLCODE -803 e a transacao inteira e descartada.
+            cod_atual_vistos = {}
 
             def match_produto(cod_planilha, desc_planilha):
                 if cod_planilha and cod_planilha in produtos_erp:
@@ -308,15 +357,18 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                         return 'JÁ CADASTRADO', info
                     return 'DIVERGENTE', info
                 if desc_planilha:
-                    dl = desc_planilha.lower()
+                    # Só considera duplicado por nome quando a descrição é IDÊNTICA.
+                    # (Antes usava "contida em", que cruzava produtos sem relação:
+                    #  ex. "PEITO" batia com "FILE DE PEITO".)
+                    dl = desc_planilha.lower().strip()
                     for p_cod, p_info in produtos_erp.items():
-                        p_desc = p_info['descricao'].lower()
-                        if dl in p_desc or p_desc in dl:
+                        if dl == p_info['descricao'].lower().strip():
                             return "JÁ CADASTRADO (~desc)", p_info
                 return None, None
 
             for idx, reg in enumerate(self.registros_lidos):
                 cod_planilha = str(reg.get('codigo_antigo', '')).strip()
+                cod_atual_planilha = str(reg.get('codigo_atual', '')).strip()
                 desc_planilha = str(reg.get('descricao', '')).strip()
 
                 if not desc_planilha:
@@ -342,17 +394,42 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                         sel = "☑"
                         acao = "Importar"
 
+                # Validacao do "Código Atual" — só para as linhas que vao INSERIR
+                # (as "Atualizar" gravam no codigo que ja existe no ERP).
+                if cod_atual_planilha and acao in ("Importar", "Criar Novo"):
+                    if cod_atual_planilha in codigos_pk_erp:
+                        ocupa = produtos_erp[cod_atual_planilha]['descricao']
+                        status = (f"ERRO (Cód. Atual {cod_atual_planilha} já é do "
+                                  f"produto '{ocupa[:28]}')")
+                        tag, sel, acao = "ERRO", "☐", "—"
+                    elif cod_atual_planilha in cod_atual_vistos:
+                        outra = cod_atual_vistos[cod_atual_planilha]
+                        status = (f"ERRO (Cód. Atual {cod_atual_planilha} repetido na "
+                                  f"planilha — linha {outra})")
+                        tag, sel, acao = "ERRO", "☐", "—"
+                    else:
+                        cod_atual_vistos[cod_atual_planilha] = linha_ini + idx
+
+                # Tipo: se a coluna foi mapeada e a celula tem valor, usa ela;
+                # senao, cai no seletor global da tela (tipo_id = None).
+                tipo_id_plan, tipo_label = self._resolver_tipo(reg.get('tipo', ''))
+                if tipo_id_plan is None:
+                    tipo_label = self.cb_tipo.get()
+
                 item = {
                     'sel': sel, 'acao': acao, 'status': status, 'tag': tag,
-                    'codigo_antigo': cod_planilha, 'descricao': desc_planilha,
+                    'codigo_antigo': cod_planilha, 'codigo_atual': cod_atual_planilha,
+                    'descricao': desc_planilha,
                     'codigo_erp': matched_info.get('codigo', '') if matched_info else '',
                     'desc_erp': matched_info.get('descricao', '') if matched_info else '',
-                    'tipo': reg.get('tipo', self.cb_tipo.get()),
+                    'tipo': tipo_label,
+                    'tipo_id': tipo_id_plan,
                     'grupo': reg.get('grupo', ''),
                     'subgrupo': reg.get('subgrupo', ''),
                     'ncm': reg.get('ncm', ''),
                     'ean': reg.get('ean', ''),
                     'unidade': reg.get('unidade', ''),
+                    'tipo_prod_producao': str(reg.get('tipo_prod_producao', '')).strip(),
                 }
                 self.dados_analisados.append(item)
 
@@ -369,6 +446,13 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_preview(self):
+        # Selo deste render. A grade e preenchida em blocos com after(), entao um
+        # render antigo pode continuar inserindo DEPOIS que outro limpou a tela —
+        # a grade acumula duas analises e os totais somam tudo. O selo faz os
+        # blocos do render antigo pararem.
+        self._render_seq = getattr(self, '_render_seq', 0) + 1
+        meu_seq = self._render_seq
+
         for i in self.tree.get_children(): self.tree.delete(i)
         self.dados_grid.clear()
 
@@ -384,6 +468,8 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         chunk_size = 30
 
         def render_chunk(start_idx):
+            if meu_seq != self._render_seq:
+                return  # um render mais novo assumiu a grade
             end_idx = min(start_idx + chunk_size, total)
             dados = self.dados_analisados
             for i in range(start_idx, end_idx):
@@ -398,18 +484,22 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     item['codigo_antigo'], item['descricao'],
                     item['tipo'], item['grupo'],
                     item['subgrupo'], item['ncm'],
-                    item['ean'], item['unidade']
+                    item['ean'], item['unidade'], item.get('codigo_atual', '')
                 ), tags=(item['tag'],))
                 self.dados_grid[item_id] = {
                     'codigo_antigo': item['codigo_antigo'],
+                    'codigo_atual': item.get('codigo_atual', ''),
                     'descricao': item['descricao'],
                     'codigo_erp': item.get('codigo_erp', ''),
                     'desc_erp': item.get('desc_erp', ''),
+                    'tipo': item.get('tipo', ''),
+                    'tipo_id': item.get('tipo_id'),
                     'grupo': item['grupo'],
                     'subgrupo': item['subgrupo'],
                     'ncm': item['ncm'],
                     'ean': item['ean'],
                     'unidade': item['unidade'],
+                    'tipo_prod_producao': item.get('tipo_prod_producao', ''),
                     '_status': 'OK' if item['tag'] == 'NOVO' else 'SKIP'
                 }
 
@@ -439,9 +529,37 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         if not self.tree.get_children(): return
         novo_tipo = self.cb_tipo.get()
         for item in self.tree.get_children():
+            dg = self.dados_grid.get(item, {})
+            if dg.get('tipo_id'):  # tipo veio mapeado da planilha, nao sobrescreve
+                continue
             valores = list(self.tree.item(item, "values"))
             valores[5] = novo_tipo
             self.tree.item(item, values=valores)
+
+    def _resolver_tipo(self, valor):
+        """Resolve o valor da coluna 'Tipo' da planilha para (id, label).
+        Aceita numero (1-6) ou nome (Revenda, Consumo, Materia Prima, Produto
+        Acabado, Servicos, Outros). Retorna (None, '') quando vazio ou nao
+        reconhecido, sinalizando que deve usar o seletor global da tela."""
+        import re as _re
+        import unicodedata
+        v = str(valor or '').strip()
+        if not v:
+            return None, ''
+        labels = {1: '1 - Revenda', 2: '2 - Consumo', 3: '3 - Matéria Prima',
+                  4: '4 - Produto Acabado', 5: '5 - Serviços', 6: '6 - Outros'}
+        m = _re.match(r'(\d+)', v)
+        if m:
+            tid = int(m.group(1))
+            return (tid, labels[tid]) if 1 <= tid <= 6 else (None, '')
+        chave = ''.join(c for c in unicodedata.normalize('NFKD', v.upper())
+                        if not unicodedata.combining(c)).strip()
+        nomes = {
+            'REVENDA': 1, 'CONSUMO': 2, 'MATERIA PRIMA': 3, 'MATERIA-PRIMA': 3,
+            'PRODUTO ACABADO': 4, 'SERVICOS': 5, 'SERVICO': 5, 'OUTROS': 6,
+        }
+        tid = nomes.get(chave)
+        return (tid, labels[tid]) if tid else (None, '')
 
     def _on_tree_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -554,6 +672,8 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 'descricao': item['descricao'],
                 'codigo_erp': item.get('codigo_erp', ''),
                 'desc_erp': item.get('desc_erp', ''),
+                'tipo': item.get('tipo', ''),
+                'tipo_id': item.get('tipo_id'),
                 'grupo': item['grupo'],
                 'subgrupo': item['subgrupo'],
                 'ncm': item['ncm'],
@@ -587,8 +707,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             tipo_sel = self.cb_tipo.get()
             prod_sistec = 'S' if self.var_producao.get() else 'N'
             modo_codigo = self.var_modo_codigo.get()
-            
-            threading.Thread(target=self._importacao_bg, args=(selecionados, tipo_sel, prod_sistec, modo_codigo), daemon=True).start()
+            copiar_cod_import = self.var_copiar_cod_import.get()
+
+            threading.Thread(target=self._importacao_bg, args=(selecionados, tipo_sel, prod_sistec, modo_codigo, copiar_cod_import), daemon=True).start()
 
     @staticmethod
     def _sanitizar(texto):
@@ -596,7 +717,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             return texto
         return texto.encode('cp1252', errors='replace').decode('cp1252')
 
-    def _importacao_bg(self, selecionados, tipo_sel, prod_sistec, modo_codigo='xml'):
+    def _importacao_bg(self, selecionados, tipo_sel, prod_sistec, modo_codigo='xml', copiar_cod_import=False):
+        sucesso = False
+        tipos_prod_ignorados = set()   # valores de "Tipo Prod. Produção" que não eram numéricos
         try:
             emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
             fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
@@ -655,7 +778,16 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     if not unidade_planilha: unidade_planilha = 'UN'
 
                     config_prod = {'empresa': emp, 'filial': fil}
-                    classificacao = {'tipo': tipo_sel, 'grupo_id': grupo_id, 'subgrupo_id': subgrupo_id, 'producao_sistec': prod_sistec}
+                    # Tipo por linha (planilha) quando mapeado; senao, dropdown da tela
+                    tipo_produto = item.get('tipo_id') or tipo_sel
+                    classificacao = {'tipo': tipo_produto, 'grupo_id': grupo_id, 'subgrupo_id': subgrupo_id, 'producao_sistec': prod_sistec}
+
+                    # Tipo Prod. Produção: campo NUMÉRICO no ERP. Só envia se for número;
+                    # texto (ex.: "CONGELADO") seria rejeitado (-303), então ignora e avisa.
+                    tipo_prod_prod = str(item.get('tipo_prod_producao', '')).strip()
+                    if tipo_prod_prod and not tipo_prod_prod.isdigit():
+                        tipos_prod_ignorados.add(tipo_prod_prod)
+                        tipo_prod_prod = ''
 
                     # Mocka objeto como se fosse XML para reuso blindado de regras do Sistec
                     xml_mock = {
@@ -668,12 +800,32 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                         if codigo_erp:
                             update_dict = DataTransformer.prepare_produto(xml_mock, config_prod, classificacao)
                             update_dict['PRODUTO_CODIGO'] = codigo_erp
+                            if tipo_prod_prod:
+                                update_dict['PRODUTO_TIPO_PROD_PRODUCAO'] = tipo_prod_prod
+                            # Flag: leva o código antigo para Auxiliar + Importação
+                            cod_ant_upd = str(item.get('codigo_antigo', '')).strip()
+                            if copiar_cod_import and cod_ant_upd:
+                                update_dict['PRODUTO_COD_AUXILIAR'] = cod_ant_upd
+                                update_dict['PRODUTO_COD_IMPORTACAO'] = cod_ant_upd
                             update_dict['_ACAO'] = 'UPDATE'
                             produtos_para_atualizar.append(update_dict)
                     else:
                         # "Importar" ou "Criar Novo"
                         cod_antigo = str(item.get('codigo_antigo', '')).strip()
-                        if not cod_antigo or modo_codigo == 'sequencial':
+                        cod_atual = str(item.get('codigo_atual', '')).strip()
+                        if cod_atual:
+                            # Cliente informou o código atual → vira o PRODUTO_CODIGO (mantido);
+                            # o código antigo continua indo para o auxiliar (PRODUTO_COD_AUXILIAR).
+                            # Rede de segurança: colisao aqui viraria -803 e derrubaria o
+                            # lote inteiro (import_produtos e all-or-nothing).
+                            if cod_atual in existentes_codigos:
+                                raise ValueError(
+                                    f"Código {cod_atual} ('{item.get('descricao', '')}') já está "
+                                    f"em uso — corrija a coluna 'Código Atual' da planilha "
+                                    f"e reanalise. Nenhum produto foi gravado.")
+                            codigo_final = cod_atual
+                            cod_aux = cod_antigo or None
+                        elif not cod_antigo or modo_codigo == 'sequencial':
                             max_num = 0
                             for code in existentes_codigos:
                                 if str(code).isdigit():
@@ -682,12 +834,18 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                             cod_aux = None
                         else:
                             codigo_final, cod_aux = DataTransformer.prepare_codigo_produto(cod_antigo, existentes_codigos, modo=modo_codigo)
-                            
+
                         existentes_codigos.add(codigo_final)
 
                         novo_dict = DataTransformer.prepare_produto(xml_mock, config_prod, classificacao)
                         novo_dict['PRODUTO_CODIGO'] = codigo_final
                         novo_dict['PRODUTO_COD_AUXILIAR'] = cod_aux
+                        if tipo_prod_prod:
+                            novo_dict['PRODUTO_TIPO_PROD_PRODUCAO'] = tipo_prod_prod
+                        # Flag: leva o código antigo para Auxiliar + Importação
+                        if copiar_cod_import and cod_antigo:
+                            novo_dict['PRODUTO_COD_AUXILIAR'] = cod_antigo
+                            novo_dict['PRODUTO_COD_IMPORTACAO'] = cod_antigo
                         novo_dict['_ACAO'] = 'INSERT'
                         produtos_para_inserir.append(novo_dict)
 
@@ -705,6 +863,11 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 msg = f"Processamento concluído!\n\n{', '.join(partes) if partes else 'Nenhum'} produto processado com sucesso."
                 if erros:
                     msg += f"\n\nHouve {len(erros)} erro(s) durante a importação. Veja o log para mais detalhes."
+                if tipos_prod_ignorados:
+                    exemplos = ', '.join(sorted(tipos_prod_ignorados)[:5])
+                    msg += (f"\n\n⚠️ 'Tipo Prod. Produção' é um campo numérico — "
+                            f"{len(tipos_prod_ignorados)} valor(es) de texto foram IGNORADOS "
+                            f"(ex.: {exemplos}). Mapeie a coluna com o código numérico, se necessário.")
                     
                 self.parent.after(0, lambda m=msg: messagebox.showinfo("Concluído", m))
                 
@@ -741,11 +904,21 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                                     messagebox.showerror("Erro ao Salvar", f"Não foi possível salvar o log:\n{ex}", parent=self.parent)
                                     
                     self.parent.after(0, lambda l=log_erros_str: mostrar_log(l))
-                    
+
+                sucesso = True
+
         except Exception as e:
             err_msg = self._sanitizar(str(e))
             self.parent.after(0, lambda m=err_msg: messagebox.showerror("Erro de Importação", f"Ocorreu um erro estrutural:\n{m}"))
         finally:
-            self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
-            self.parent.after(0, lambda: self.btn_importar.config(state=tk.NORMAL))
-            self.parent.after(0, lambda: self.lbl_status.config(text="Pronto."))
+            self.parent.after(0, lambda ok=sucesso: self._pos_importacao(ok))
+
+    def _pos_importacao(self, sucesso):
+        """Após importar: recarrega a tela (re-analisa) se deu certo; senão só libera os botões."""
+        self.btn_importar.config(state=tk.NORMAL)
+        if sucesso and self.caminho_arquivo and self.cb_abas.get():
+            # Re-analisa para a grade refletir o novo estado do ERP (itens viram "JÁ CADASTRADO")
+            self._iniciar_analise()
+        else:
+            self.btn_analisar.config(state=tk.NORMAL)
+            self.lbl_status.config(text="Pronto.")

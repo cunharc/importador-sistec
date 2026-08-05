@@ -14,6 +14,10 @@ PyInstaller.__main__.run([
     '--add-data=sistec.jpg;.',
     '--add-data=Icone_plano.jpg;.',
     '--add-data=nfe_cli.jpg;.',
+    # main.py:53 e telas/tela_inicial.py:80 abrem este PNG por resource_path() —
+    # sem embutir, o logo da tela inicial nao aparece no .exe (estava no build.spec
+    # mas nunca aqui, e este e o script que compila de verdade)
+    '--add-data=Logo oficial grupos - Sistec.png;.',
     '--add-data=ncm_governo.json;.',
     '--add-data=cfop_governo.json;.',
     '--add-data=config_modulos_log.json;.',

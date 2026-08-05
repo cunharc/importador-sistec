@@ -3,12 +3,80 @@ from tkinter import ttk, filedialog, messagebox
 import configparser
 import threading
 import os
+import re
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 from utils.validator import ValidatorFiscal
 from utils.report_generator import generate_audit_report
 from utils.transformer import DataTransformer
 from utils.importer import FirebirdImporter
+from utils import tema
+
+# Limite do INTEGER do Firebird (PRODUTO_CODIGO é LONG, 4 bytes).
+COD_MAX = 2147483647
+
+# O sistema antigo do cliente emite o cProd com DOIS códigos separados por vírgula
+# ("68, 918") quando o mesmo produto tem dois cadastros lá. Gravar o texto inteiro
+# deixa o produto invisível na importação das notas, porque a nota referencia só
+# "68" ou só "918". Cada parte então vira um cadastro próprio e, terminadas as
+# importações, inativa-se o que não foi usado.
+# Só vírgula e ponto-e-vírgula: '/' e '+' aparecem DENTRO de códigos legítimos
+# ('mandril1/2', 'CABO HDMI+HDMI20M') e não podem quebrar o código em dois.
+_SEP_CODIGO = re.compile(r'[,;]')
+
+
+def separar_codigos(c_prod):
+    """Lista de códigos contidos num cProd — um só, na esmagadora maioria."""
+    s = str(c_prod if c_prod is not None else '').strip()
+    if not s:
+        return []
+    # partes já vem sem os vazios, então 'A,B' -> ['A','B'], 'A' -> ['A'],
+    # 'A,' -> ['A'] e ' , ' -> [] (não devolve a vírgula como se fosse código).
+    return [p.strip() for p in _SEP_CODIGO.split(s) if p.strip()]
+
+
+def codigo_erp_numerico(cod_xml, existentes, modo='xml'):
+    """Escolhe o PRODUTO_CODIGO, que é INTEGER no banco.
+
+    Um cProd alfanumérico ('MCC101') ou composto ('68, 918') gravado direto ali dá
+    `-303 conversion error from string` e, como o import_produtos levanta no primeiro
+    erro, derruba o lote inteiro. Aqui o código do XML só é aproveitado quando é
+    numérico, cabe no INTEGER e está livre; senão entra o menor número livre.
+
+    O código do XML nunca se perde: vai para PRODUTO_COD_AUXILIAR e
+    PRODUTO_COD_IMPORTACAO (VARCHAR(100)), que é por onde a importação de notas
+    reencontra o produto.
+
+    Devolve (codigo_erp, cod_xml).
+    """
+    limpos = {str(c).strip().lstrip('0') or '0' for c in existentes}
+    numericos = sorted(int(c) for c in limpos if c.isdigit() and int(c) <= COD_MAX)
+    bruto = str(cod_xml if cod_xml is not None else '').strip()
+
+    if modo == 'sequencial':
+        return str((numericos[-1] + 1) if numericos else 1), bruto
+
+    candidato = bruto.lstrip('0')
+    if candidato.isdigit() and int(candidato) <= COD_MAX and candidato not in limpos:
+        return candidato, bruto
+
+    # menor lacuna livre (mesmo critério de antes, agora sempre numérica)
+    menor = 1
+    for c in numericos:
+        if c == menor:
+            menor += 1
+        elif c > menor:
+            break
+    return str(menor), bruto
+
+
+# A barra que quebra em varias linhas vive em utils/tema.py desde que a tela de
+# NCM passou a precisar dela. O alias mantem o nome usado neste arquivo.
+BarraFluida = tema.BarraFluida
+
+
+_rotulo = tema.rotulo_campo
+
 
 class ModalPreviewProdutos(tk.Toplevel):
     def __init__(self, parent, itens, config, config_db, classificacao, grupos_db, subgrupos_db, callback_importar, modo_codigo='xml'):
@@ -17,7 +85,9 @@ class ModalPreviewProdutos(tk.Toplevel):
         w = min(1100, int(self.winfo_screenwidth() * 0.92))
         h = min(700, int(self.winfo_screenheight() * 0.85))
         self.geometry(f"{w}x{h}")
-        self.minsize(640, 480)
+        # minsize baixo de propósito: em 1024x768 com a barra do Windows, um piso de
+        # 640x480 já obrigava a janela a nascer maior que a área útil.
+        self.minsize(560, 400)
         self.transient(parent.winfo_toplevel())
         self.grab_set()
         
@@ -33,7 +103,8 @@ class ModalPreviewProdutos(tk.Toplevel):
         
         self._criar_widgets()
         self._preparar_dados()
-        
+        tema.centralizar(self, w, h)
+
     def _preparar_dados(self):
         emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
         fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
@@ -53,17 +124,26 @@ class ModalPreviewProdutos(tk.Toplevel):
                         erp_match = r['validacao'].erp_match or {}
                         
                         novo_dict = DataTransformer.prepare_produto(item, config_prod, self.classificacao)
-                        
+                        cod_xml = str(item.get('c_prod') or '').strip()
+                        novo_dict['_COD_XML'] = cod_xml
+                        novo_dict['_COD_XML_ORIGINAL'] = str(item.get('c_prod_original')
+                                                             or cod_xml).strip()
+
                         if acao == "ATUALIZAR ERP":
                             novo_dict['PRODUTO_CODIGO'] = erp_match.get('produto_codigo')
                             novo_dict['_ACAO'] = 'UPDATE'
                         else:
-                            codigo_final, cod_aux = DataTransformer.prepare_codigo_produto(item.get('c_prod', ''), existentes_codigos, modo=self.modo_codigo)
+                            codigo_final, cod_aux = codigo_erp_numerico(
+                                cod_xml, existentes_codigos, self.modo_codigo)
                             novo_dict['PRODUTO_CODIGO'] = codigo_final
-                            novo_dict['PRODUTO_COD_AUXILIAR'] = cod_aux
+                            novo_dict['PRODUTO_COD_AUXILIAR'] = cod_aux[:100] or None
+                            # A importação de notas procura o produto por
+                            # COD_IMPORTACAO antes do auxiliar; sem gravar aqui, o
+                            # produto cadastrado nesta tela não é reencontrado lá.
+                            novo_dict['PRODUTO_COD_IMPORTACAO'] = cod_aux[:100] or None
                             novo_dict['_ACAO'] = 'INSERT'
                             existentes_codigos.add(codigo_final)
-                            
+
                         self.produtos_para_inserir.append(novo_dict)
                         
                 self.after(0, self._renderizar_dados)
@@ -77,40 +157,55 @@ class ModalPreviewProdutos(tk.Toplevel):
         self.lbl_titulo = ttk.Label(self, text="Carregando produtos para visualização...", font=("Segoe UI", 12, "bold"))
         self.lbl_titulo.pack(anchor=tk.W, padx=10, pady=10)
         
-        frame_edicao = ttk.LabelFrame(self, text="Editar Grupo/Subgrupo do(s) Produto(s) Selecionado(s)", padding="5")
-        frame_edicao.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(frame_edicao, text="Grupo:").grid(row=0, column=0, padx=5, sticky=tk.W)
-        self.cb_grupo = ttk.Combobox(frame_edicao, width=30, state="readonly")
-        self.cb_grupo.grid(row=0, column=1, padx=5)
+        barra = BarraFluida(self, "Editar Grupo/Subgrupo do(s) Produto(s) Selecionado(s)")
+        barra.pack(fill=tk.X, padx=10, pady=5)
+
+        cx = barra.grupo()
+        ttk.Label(cx, text="Grupo:").pack(side=tk.LEFT, padx=(0, 4))
+        self.cb_grupo = ttk.Combobox(cx, width=26, state="readonly")
+        self.cb_grupo.pack(side=tk.LEFT)
         self.cb_grupo.bind("<<ComboboxSelected>>", self._on_grupo_selecionado)
-        
-        ttk.Label(frame_edicao, text="Subgrupo:").grid(row=0, column=2, padx=5, sticky=tk.W)
-        self.cb_subgrupo = ttk.Combobox(frame_edicao, width=30, state="readonly")
-        self.cb_subgrupo.grid(row=0, column=3, padx=5)
-        
-        ttk.Button(frame_edicao, text="Aplicar Seleção", command=self._aplicar_grupo_subgrupo).grid(row=0, column=4, padx=10)
+
+        cx = barra.grupo()
+        ttk.Label(cx, text="Subgrupo:").pack(side=tk.LEFT, padx=(0, 4))
+        self.cb_subgrupo = ttk.Combobox(cx, width=26, state="readonly")
+        self.cb_subgrupo.pack(side=tk.LEFT)
+
+        cx = barra.grupo()
+        ttk.Button(cx, text="Aplicar Seleção",
+                   command=self._aplicar_grupo_subgrupo).pack(side=tk.LEFT)
+        barra.montar()
 
         valores_grupo = [f"{g.get('grupo_codigo')} - {g.get('grupo_descricao', '')}" for g in self.grupos_db]
         self.cb_grupo['values'] = valores_grupo
 
         frame_grid = ttk.Frame(self)
         frame_grid.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        colunas = ("AÇÃO", "CÓDIGO ERP", "DESCRIÇÃO", "NCM", "C. BARRAS", "CEST", "UNID", "GRUPO", "SUBGRUPO")
+        frame_grid.rowconfigure(0, weight=1)
+        frame_grid.columnconfigure(0, weight=1)
+
+        # CÓD. XML fica ao lado do CÓDIGO ERP porque é a correspondência que o
+        # usuário precisa ver: o código do ERP é gerado, o do XML é o que veio na nota.
+        colunas = ("AÇÃO", "CÓDIGO ERP", "CÓD. XML", "DESCRIÇÃO", "NCM", "C. BARRAS",
+                   "CEST", "UNID", "GRUPO", "SUBGRUPO")
         self.tree = ttk.Treeview(frame_grid, columns=colunas, show="headings", selectmode="extended")
-        
-        larguras = [100, 100, 250, 80, 100, 80, 50, 120, 120]
+
+        larguras = [90, 90, 110, 230, 80, 100, 70, 50, 110, 110]
         for col, larg in zip(colunas, larguras):
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=larg, anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
-            
+            self.tree.column(col, width=larg, minwidth=45, stretch=(col == "DESCRIÇÃO"),
+                             anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
+
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         scroll_y = ttk.Scrollbar(frame_grid, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scroll_y.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        
+        # Sem o scroll horizontal, numa tela estreita as colunas finais (GRUPO,
+        # SUBGRUPO) ficam inalcançáveis.
+        scroll_x = ttk.Scrollbar(frame_grid, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscroll=scroll_y.set, xscroll=scroll_x.set)
+        self.tree.grid(row=0, column=0, sticky=tk.NSEW)
+        scroll_y.grid(row=0, column=1, sticky=tk.NS)
+        scroll_x.grid(row=1, column=0, sticky=tk.EW)
+
         frame_bot = ttk.Frame(self, padding="10")
         frame_bot.pack(fill=tk.X, side=tk.BOTTOM)
         
@@ -120,16 +215,27 @@ class ModalPreviewProdutos(tk.Toplevel):
         
     def _renderizar_dados(self):
         for item in self.tree.get_children(): self.tree.delete(item)
-        self.lbl_titulo.config(text=f"Produtos que serão processados ({len(self.produtos_para_inserir)} itens):")
+        compostos = sum(1 for p in self.produtos_para_inserir
+                        if p.get('_COD_XML_ORIGINAL') != p.get('_COD_XML'))
+        titulo = f"Produtos que serão processados ({len(self.produtos_para_inserir)} itens)"
+        if compostos:
+            titulo += (f" — {compostos} vêm de código composto e serão cadastrados "
+                       f"em duplicidade proposital")
+        self.lbl_titulo.config(text=titulo + ":")
         for idx, p in enumerate(self.produtos_para_inserir):
             acao_str = "📝 ATUALIZAR" if p.get('_ACAO') == 'UPDATE' else "✨ NOVO"
-            
+
             grupo_nome = self._get_nome_grupo(p.get('PRODUTO_GRUPO'))
             subgrupo_nome = self._get_nome_subgrupo(p.get('PRODUTO_GRUPO'), p.get('PRODUTO_SUBGRUPO'))
+
+            cod_xml = p.get('_COD_XML', '')
+            if p.get('_COD_XML_ORIGINAL') and p['_COD_XML_ORIGINAL'] != cod_xml:
+                cod_xml = f"{cod_xml}  ⧉"   # veio de um código composto
 
             self.tree.insert("", tk.END, iid=str(idx), values=(
                 acao_str,
                 p.get('PRODUTO_CODIGO', ''),
+                cod_xml,
                 p.get('PRODUTO_DESCRICAO', ''),
                 p.get('PRODUTO_CLASS_FISCAL', ''),
                 p.get('PRODUTO_CBARRA', ''),
@@ -204,8 +310,8 @@ class ModalPreviewProdutos(tk.Toplevel):
             p['PRODUTO_SUBGRUPO'] = subgrupo_id
             
             valores = list(self.tree.item(item_id, 'values'))
-            valores[7] = grupo_str
-            valores[8] = subgrupo_str
+            valores[8] = grupo_str      # GRUPO e SUBGRUPO são as duas últimas
+            valores[9] = subgrupo_str
             self.tree.item(item_id, values=valores)
             
         messagebox.showinfo("Sucesso", "Classificação aplicada aos produtos selecionados.", parent=self)
@@ -240,40 +346,76 @@ class TelaXmlProdutos(ttk.Frame):
         self.after(500, self._carregar_grupos_db) # Carrega os grupos 0.5s após abrir a tela
 
     def _criar_widgets(self):
-        # === HEADER ===
-        header = tk.Frame(self, bg="#27AE60", padx=15, pady=8)
-        header.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(header, text="AUDITORIA E IMPORTAÇÃO DE PRODUTOS VIA XML",
-                 font=("Segoe UI", 14, "bold"), bg="#27AE60", fg="white").pack(anchor=tk.W)
+        # === HEADER (identidade Sistecweb) ===
+        tema.montar_header(
+            self, "Produtos & Consolidado",
+            "Auditoria final por produto cruzando NCM, CFOP e ICMS para cadastro e correção"
+        ).pack(fill=tk.X)
 
-        # === TOP BAR: Config compacta ===
-        top_bar = ttk.LabelFrame(self, text="Configuração", padding="8")
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        # Em console de servidor (1024px ou menos) 210px de menu são 20% da largura
+        # útil; encolher o menu devolve espaço para a grade, que é o que interessa.
+        largura_sb = 210 if self.winfo_screenwidth() >= 1300 else 168
+        sidebar = tema.montar_sidebar(corpo, largura=largura_sb)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Analisar XMLs", self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Processar Produtos", self._iniciar_importacao, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        self.btn_relatorio = tema.botao_sidebar(sidebar, "📊   Gerar CSV", self._gerar_relatorio)
+        self.btn_relatorio.config(state=tk.DISABLED)
+        self.btn_relatorio.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        # === TOP BAR: Config compacta (quebra em linhas em tela estreita) ===
+        top_bar = BarraFluida(content, "Configuração")
         top_bar.pack(fill=tk.X, pady=2)
 
-        tk.Label(top_bar, text="Empresa:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, padx=(5, 2), sticky=tk.W)
-        self.ent_empresa = ttk.Entry(top_bar, width=8, font=("Segoe UI", 9))
-        self.ent_empresa.grid(row=0, column=1, padx=(0, 15))
+        cx = top_bar.grupo()
+        _rotulo(cx, "Empresa:").pack(side=tk.LEFT, padx=(0, 3))
+        self.ent_empresa = ttk.Entry(cx, width=6, font=("Segoe UI", 9))
+        self.ent_empresa.pack(side=tk.LEFT)
 
-        tk.Label(top_bar, text="Filial:", font=("Segoe UI", 9, "bold")).grid(row=0, column=2, padx=(5, 2), sticky=tk.W)
-        self.ent_filial = ttk.Entry(top_bar, width=8, font=("Segoe UI", 9))
-        self.ent_filial.grid(row=0, column=3, padx=(0, 15))
+        cx = top_bar.grupo()
+        _rotulo(cx, "Filial:").pack(side=tk.LEFT, padx=(0, 3))
+        self.ent_filial = ttk.Entry(cx, width=6, font=("Segoe UI", 9))
+        self.ent_filial.pack(side=tk.LEFT)
 
-        tk.Label(top_bar, text="UF:", font=("Segoe UI", 9, "bold")).grid(row=0, column=4, padx=(5, 2), sticky=tk.W)
-        self.ent_uf = ttk.Entry(top_bar, width=5, font=("Segoe UI", 9))
-        self.ent_uf.grid(row=0, column=5, padx=(0, 15))
+        cx = top_bar.grupo()
+        _rotulo(cx, "UF:").pack(side=tk.LEFT, padx=(0, 3))
+        self.ent_uf = ttk.Entry(cx, width=4, font=("Segoe UI", 9))
+        self.ent_uf.pack(side=tk.LEFT)
         self.ent_uf.insert(0, "SP")
 
-        ttk.Separator(top_bar, orient=tk.VERTICAL).grid(row=0, column=6, sticky=tk.NS, padx=10, pady=2)
-
-        tk.Label(top_bar, text="Código:", font=("Segoe UI", 9, "bold")).grid(row=0, column=7, padx=(5, 2), sticky=tk.W)
+        cx = top_bar.grupo()
+        _rotulo(cx, "Código:").pack(side=tk.LEFT, padx=(0, 3))
         self.var_modo_codigo = tk.StringVar(value="xml")
-        rb_xml = ttk.Radiobutton(top_bar, text="Seguir XML", variable=self.var_modo_codigo, value="xml")
-        rb_xml.grid(row=0, column=8, padx=(0, 5))
-        rb_seq = ttk.Radiobutton(top_bar, text="Sequencial", variable=self.var_modo_codigo, value="sequencial")
-        rb_seq.grid(row=0, column=9)
+        ttk.Radiobutton(cx, text="Seguir XML", variable=self.var_modo_codigo,
+                        value="xml").pack(side=tk.LEFT)
+        ttk.Radiobutton(cx, text="Sequencial", variable=self.var_modo_codigo,
+                        value="sequencial").pack(side=tk.LEFT, padx=(4, 0))
+        top_bar.montar()
 
         # === FILE SELECTION ===
-        frame_dir = ttk.Frame(self)
+        frame_dir = ttk.Frame(content)
         frame_dir.pack(fill=tk.X, pady=4)
 
         tk.Label(frame_dir, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -283,57 +425,66 @@ class TelaXmlProdutos(ttk.Frame):
         btn_pasta.pack(side=tk.LEFT, padx=2)
         btn_arq = ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos)
         btn_arq.pack(side=tk.LEFT, padx=2)
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar XMLs", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.LEFT, padx=5)
 
         # === PROGRESS ===
-        self.progresso = ttk.Progressbar(self, orient=tk.HORIZONTAL, mode='determinate')
+        self.progresso = ttk.Progressbar(content, orient=tk.HORIZONTAL, mode='determinate')
         self.progresso.pack(fill=tk.X, pady=3)
-        self.lbl_status = ttk.Label(self, text="Aguardando arquivos...", font=("Segoe UI", 9), foreground="#555")
+        self.lbl_status = ttk.Label(content, text="Aguardando arquivos...", font=("Segoe UI", 9), foreground="#555")
         self.lbl_status.pack(anchor=tk.W, padx=2)
 
-        # === CLASSIFICATION BAR ===
-        class_bar = ttk.LabelFrame(self, text="Classificação em Lote", padding="8")
+        # === CLASSIFICATION BAR (quebra em linhas em tela estreita) ===
+        class_bar = BarraFluida(content, "Classificação em Lote")
         class_bar.pack(fill=tk.X, pady=4)
 
-        tk.Label(class_bar, text="Tipo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=0, padx=(5, 2), sticky=tk.W)
-        self.cb_tipo = ttk.Combobox(class_bar, width=18, state="readonly", font=("Segoe UI", 9), values=[
+        cx = class_bar.grupo()
+        _rotulo(cx, "Tipo:").pack(side=tk.LEFT, padx=(0, 3))
+        self.cb_tipo = ttk.Combobox(cx, width=17, state="readonly", font=("Segoe UI", 9), values=[
             "1 - Revenda", "2 - Consumo", "3 - Matéria Prima",
             "4 - Produto Acabado", "5 - Serviços", "6 - Outros"
         ])
-        self.cb_tipo.grid(row=0, column=1, padx=(0, 10))
+        self.cb_tipo.pack(side=tk.LEFT)
         self.cb_tipo.set("4 - Produto Acabado")
 
-        tk.Label(class_bar, text="Grupo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=2, padx=(5, 2), sticky=tk.W)
-        self.cb_grupo = ttk.Combobox(class_bar, width=22, state="readonly", font=("Segoe UI", 9))
-        self.cb_grupo.grid(row=0, column=3, padx=(0, 10))
+        cx = class_bar.grupo()
+        _rotulo(cx, "Grupo:").pack(side=tk.LEFT, padx=(0, 3))
+        self.cb_grupo = ttk.Combobox(cx, width=18, state="readonly", font=("Segoe UI", 9))
+        self.cb_grupo.pack(side=tk.LEFT)
         self.cb_grupo.bind("<<ComboboxSelected>>", self._on_grupo_selecionado)
 
-        tk.Label(class_bar, text="Subgrupo:", font=("Segoe UI", 9, "bold")).grid(row=0, column=4, padx=(5, 2), sticky=tk.W)
-        self.cb_subgrupo = ttk.Combobox(class_bar, width=22, state="readonly", font=("Segoe UI", 9))
-        self.cb_subgrupo.grid(row=0, column=5, padx=(0, 10))
+        cx = class_bar.grupo()
+        _rotulo(cx, "Subgrupo:").pack(side=tk.LEFT, padx=(0, 3))
+        self.cb_subgrupo = ttk.Combobox(cx, width=18, state="readonly", font=("Segoe UI", 9))
+        self.cb_subgrupo.pack(side=tk.LEFT)
+        ttk.Button(cx, text="🔄", width=3,
+                   command=self._carregar_grupos_db).pack(side=tk.LEFT, padx=(4, 0))
 
-        ttk.Button(class_bar, text="🔄", width=3, command=self._carregar_grupos_db).grid(row=0, column=6, padx=(0, 10))
-
+        cx = class_bar.grupo()
         self.var_producao_sistec = tk.BooleanVar(value=False)
-        ttk.Checkbutton(class_bar, text="Produção Sistec", variable=self.var_producao_sistec).grid(row=0, column=7, padx=(0, 10))
+        ttk.Checkbutton(cx, text="Produção Sistec",
+                        variable=self.var_producao_sistec).pack(side=tk.LEFT)
 
-        ttk.Separator(class_bar, orient=tk.VERTICAL).grid(row=0, column=8, sticky=tk.NS, padx=10, pady=2)
-
-        ttk.Button(class_bar, text="☑ Marcar Novos", command=self._marcar_novos).grid(row=0, column=9, padx=2)
-        ttk.Button(class_bar, text="☐ Desmarcar", command=self._desmarcar_todos).grid(row=0, column=10, padx=2)
+        cx = class_bar.grupo()
+        ttk.Button(cx, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT)
+        ttk.Button(cx, text="☐ Desmarcar",
+                   command=self._desmarcar_todos).pack(side=tk.LEFT, padx=(4, 0))
+        class_bar.montar()
 
         # === TREEVIEW ===
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=6)
+        frame_grade.rowconfigure(0, weight=1)
+        frame_grade.columnconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
 
-        larguras = [40, 120, 80, 80, 200, 200, 80, 80, 150]
+        larguras = [36, 110, 95, 75, 190, 190, 80, 80, 230]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             anchor = tk.W if col in ["PRODUTO XML", "PRODUTO ERP", "DIVERGÊNCIAS"] else tk.CENTER
-            self.tree.column(col, width=larg, anchor=anchor)
+            # stretch só na última: com as outras fixas o scroll horizontal funciona
+            # e nada é comprimido até ficar ilegível em tela estreita.
+            self.tree.column(col, width=larg, minwidth=36,
+                             stretch=(col == "DIVERGÊNCIAS"), anchor=anchor)
 
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
@@ -342,28 +493,13 @@ class TelaXmlProdutos(ttk.Frame):
         self.tree.tag_configure('NAO_ENCONTRADO', background='#FADBD8')
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scroll_y.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # === FOOTER ===
-        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
-        footer.pack(fill=tk.X, pady=(4, 0))
-
-        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
-                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
-                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
-
-        self.btn_relatorio = tk.Button(footer, text="📊 Gerar CSV", state=tk.DISABLED, command=self._gerar_relatorio,
-                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
-                                       cursor="hand2", padx=12, pady=2)
-        self.btn_relatorio.pack(side=tk.RIGHT, padx=3)
-
-        self.btn_importar = tk.Button(footer, text="🚀 Processar Produtos", state=tk.DISABLED,
-                                      command=self._iniciar_importacao,
-                                      font=("Segoe UI", 9, "bold"), bg="#27AE60", fg="white",
-                                      cursor="hand2", padx=14, pady=2)
-        self.btn_importar.pack(side=tk.RIGHT, padx=3)
+        # A grade soma ~1.100px de colunas. Numa tela de 1024 as últimas ficavam
+        # fora do alcance, sem scroll horizontal e sem nenhuma indicação disso.
+        scroll_x = ttk.Scrollbar(frame_grade, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscroll=scroll_y.set, xscroll=scroll_x.set)
+        self.tree.grid(row=0, column=0, sticky=tk.NSEW)
+        scroll_y.grid(row=0, column=1, sticky=tk.NS)
+        scroll_x.grid(row=1, column=0, sticky=tk.EW)
 
     def _carregar_config_iniciais(self):
         self.config.read('config.ini', encoding='utf-8')
@@ -632,9 +768,21 @@ class TelaXmlProdutos(ttk.Frame):
                         item['NCM'] = ncm_fmt
                     
                 c_prod = str(item.get('c_prod') or item.get('cProd') or '').strip()
-                if c_prod and c_prod not in mapa_produtos_xml:
-                    mapa_produtos_xml[c_prod] = item
-                    
+                if not c_prod:
+                    continue
+                # Código composto ("68, 918") vira uma linha por código: cada um
+                # precisa do seu cadastro, porque a nota vai referenciar um OU outro.
+                partes = separar_codigos(c_prod)
+                for parte in partes:
+                    if parte in mapa_produtos_xml:
+                        continue
+                    novo = dict(item)
+                    novo['c_prod'] = parte
+                    novo['cProd'] = parte
+                    novo['c_prod_original'] = c_prod
+                    novo['irmaos_codigo'] = [p for p in partes if p != parte]
+                    mapa_produtos_xml[parte] = novo
+
             lista_unicos_xml = list(mapa_produtos_xml.values())
                 
             # 3. Instanciar o Validador
@@ -676,6 +824,16 @@ class TelaXmlProdutos(ttk.Frame):
             pass
 
     def _renderizar_resultados(self):
+        # Selo deste render. A grade e preenchida em blocos com after(), entao um
+        # render antigo pode continuar inserindo DEPOIS que outro limpou a tela —
+        # a grade acumula duas analises e os totais somam tudo. O selo faz os
+        # blocos do render antigo pararem.
+        self._render_seq = getattr(self, '_render_seq', 0) + 1
+        meu_seq = self._render_seq
+
+        # Callback agendado em 2º plano: se o usuário já trocou de tela, aborta.
+        if not self.winfo_exists():
+            return
         self.dados_grid.clear()
         self.lbl_status.config(text="Renderizando resultados na tabela...")
         self.btn_analisar.config(state=tk.DISABLED)
@@ -684,6 +842,8 @@ class TelaXmlProdutos(ttk.Frame):
         total = len(self.resultados_validacao)
         
         def render_chunk(start_idx):
+            if meu_seq != self._render_seq:
+                return  # um render mais novo assumiu a grade
             end_idx = min(start_idx + chunk_size, total)
             for i in range(start_idx, end_idx):
                 r = self.resultados_validacao[i]
@@ -706,7 +866,16 @@ class TelaXmlProdutos(ttk.Frame):
                 else:
                     sel = "☐"
                     acao = "IGNORAR"
-                    
+
+                # Aviso do código composto: o usuário precisa saber que este
+                # cadastro tem um gêmeo e que um dos dois será inativado no fim.
+                irmaos = xml.get('irmaos_codigo') or []
+                if irmaos:
+                    aviso = (f"código composto \"{xml.get('c_prod_original')}\" — "
+                             f"cadastrar também {', '.join(irmaos)} e inativar o "
+                             f"que não for usado")
+                    divs = aviso if divs == 'OK' else f"{aviso} | {divs}"
+
                 item_id = self.tree.insert("", tk.END, values=(
                     sel,
                     acao,
@@ -742,7 +911,15 @@ class TelaXmlProdutos(ttk.Frame):
 
     def _finalizar_pipeline(self):
         self.btn_analisar.config(state=tk.NORMAL)
-        self.lbl_status.config(text=f"Pronto. {len(self.resultados_validacao)} itens analisados.")
+        texto = f"Pronto. {len(self.resultados_validacao)} itens analisados."
+        compostos = sum(1 for r in self.resultados_validacao
+                        if r['xml'].get('irmaos_codigo'))
+        if compostos:
+            originais = {r['xml'].get('c_prod_original')
+                         for r in self.resultados_validacao if r['xml'].get('irmaos_codigo')}
+            texto += (f"  ⧉ {len(originais)} código(s) composto(s) no XML geraram "
+                      f"{compostos} cadastros — inative os não usados no fim.")
+        self.lbl_status.config(text=texto)
 
     def _gerar_relatorio(self):
         caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Auditoria_Fiscal_Produtos.csv", filetypes=[("CSV", "*.csv")])
@@ -856,7 +1033,18 @@ class TelaXmlProdutos(ttk.Frame):
                         """
                         if cursor: cursor.execute(sql_unid, [emp, fil, p.get('PRODUTO_CODIGO'), unidade_cod])
                         else: fb.execute(sql_unid, [emp, fil, p.get('PRODUTO_CODIGO'), unidade_cod])
-                        
+
+                        # Codigo de barras (EAN) na tabela de barras (tela geral)
+                        cbarra_up = str(p.get('PRODUTO_CBARRA') or '').strip()
+                        cod_prod_up = str(p.get('PRODUTO_CODIGO') or '').strip()
+                        if cbarra_up and cod_prod_up.isdigit():
+                            sql_cb = ("UPDATE OR INSERT INTO TABELA_PRODUTO_CBARRA "
+                                      "(PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA, PCB_QTDE_PACK) "
+                                      "VALUES (?, ?, ?, ?, 1) "
+                                      "MATCHING (PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA)")
+                            if cursor: cursor.execute(sql_cb, [emp, fil, int(cod_prod_up), cbarra_up[:128]])
+                            else: fb.execute(sql_cb, [emp, fil, int(cod_prod_up), cbarra_up[:128]])
+
                         atualizados += 1
                     except Exception as e_up:
                         erros.append({'produto': p, 'detalhe': f"Erro no UPDATE: {e_up}"})

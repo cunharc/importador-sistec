@@ -5,6 +5,7 @@ import threading
 import re
 import os
 
+from utils import tema
 from utils.excel_reader import obter_abas_planilha, ler_planilha_produtos
 from utils.firebird_service import FirebirdService
 
@@ -25,6 +26,97 @@ CAMPOS_MAPEAMENTO = [
     ("IBS - %", "ibs_pct", False),
     ("CBS - %", "cbs_pct", False),
 ]
+
+class DialogoRevisaoFaixas(tk.Toplevel):
+    """Modal para revisar/confirmar as faixas de ICMS que serão criadas antes de gravar no NCM.
+
+    Agrupa as faixas por combinação (UF + CST + alíquota + redução): uma faixa por combinação,
+    com o número editável. As faixas encontradas (OK) são apenas contabilizadas.
+    """
+    def __init__(self, parent, combos_criar, qtd_ok, proximo_numero):
+        super().__init__(parent)
+        self.title("Revisar Faixas de ICMS a Criar")
+        w = min(760, int(self.winfo_screenwidth() * 0.8))
+        h = min(600, int(self.winfo_screenheight() * 0.8))
+        self.geometry(f"{w}x{h}")
+        self.minsize(560, 420)
+        self.transient(parent)
+        self.grab_set()
+
+        self.combos_criar = combos_criar
+        self.qtd_ok = qtd_ok
+        self.resultado = None
+        self.entradas = {}
+
+        self._criar_widgets(proximo_numero)
+        tema.centralizar(self, w, h)
+
+    def _criar_widgets(self, proximo_numero):
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill=tk.X)
+        ttk.Label(top, text="Revisão das Faixas de ICMS", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W)
+        msg = (
+            f"{len(self.combos_criar)} faixa(s) de ICMS serão CRIADAS abaixo.\n"
+            f"{self.qtd_ok} NCM(s) selecionado(s) já usam faixas existentes (não precisam criar).\n"
+            "Confira e, se quiser, edite o número de cada faixa nova. Cada faixa será gravada para CT, NC e SN."
+        )
+        ttk.Label(top, text=msg, foreground="#555", justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
+
+        frame_mid = ttk.LabelFrame(self, text="Faixas novas (uma por combinação UF/CST/alíquota/redução)", padding=8)
+        frame_mid.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        canvas = tk.Canvas(frame_mid, highlightthickness=0)
+        sb = ttk.Scrollbar(frame_mid, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+
+        headers = ["Nº Faixa *", "UF", "CST", "% ICMS", "% Red.", "Qtd NCMs"]
+        for i, h in enumerate(headers):
+            ttk.Label(inner, text=h, font=("Segoe UI", 9, "bold")).grid(row=0, column=i, padx=6, pady=4)
+
+        for idx, combo in enumerate(self.combos_criar, start=1):
+            ent = ttk.Entry(inner, width=8, font=("Segoe UI", 9, "bold"))
+            ent.insert(0, str(proximo_numero + idx - 1))
+            ent.grid(row=idx, column=0, padx=6, pady=2)
+            self.entradas[combo['key']] = ent
+            ttk.Label(inner, text=combo['uf']).grid(row=idx, column=1, padx=6)
+            ttk.Label(inner, text=combo['cst']).grid(row=idx, column=2, padx=6)
+            ttk.Label(inner, text=f"{combo['aliquota'] or 0}%").grid(row=idx, column=3, padx=6)
+            ttk.Label(inner, text=f"{combo['reducao'] or 0}%").grid(row=idx, column=4, padx=6)
+            ttk.Label(inner, text=str(combo['qtd'])).grid(row=idx, column=5, padx=6)
+
+        bot = ttk.Frame(self, padding=10)
+        bot.pack(fill=tk.X)
+        ttk.Button(bot, text="Cancelar", command=self._cancelar).pack(side=tk.LEFT)
+        ttk.Button(bot, text="Confirmar e Importar", command=self._confirmar, style="Accent.TButton").pack(side=tk.RIGHT)
+
+    def _confirmar(self):
+        mapa = {}
+        vistos = set()
+        for combo in self.combos_criar:
+            val = self.entradas[combo['key']].get().strip()
+            if not val.isdigit() or int(val) <= 0:
+                return messagebox.showwarning("Aviso",
+                    f"Número de faixa inválido para UF {combo['uf']} CST {combo['cst']}.", parent=self)
+            if val in vistos:
+                return messagebox.showwarning("Aviso",
+                    f"Número de faixa {val} repetido. Cada faixa nova precisa de um número único.", parent=self)
+            vistos.add(val)
+            mapa[combo['key']] = {
+                'faixa': val, 'uf': combo['uf'], 'cst': combo['cst'],
+                'aliquota': combo['aliquota'], 'reducao': combo['reducao']
+            }
+        self.resultado = mapa
+        self.destroy()
+
+    def _cancelar(self):
+        self.resultado = None
+        self.destroy()
+
 
 class TelaImportacaoPlanilhaTributacao(ttk.Frame):
     def __init__(self, parent, callback_voltar=None):
@@ -53,12 +145,39 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
         self._carregar_config_mapeamento()
 
     def _criar_widgets(self):
-        header = tk.Frame(self, bg="#003399", padx=15, pady=8)
-        header.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(header, text="IMPORTAÇÃO DE TRIBUTAÇÃO VIA PLANILHA (Excel/CSV)",
-                 font=("Segoe UI", 14, "bold"), bg="#003399", fg="white").pack(anchor=tk.W)
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Importar Tributação (Excel)",
+            "Importação de tributação por NCM via planilha: ICMS, PIS, COFINS e Reforma Tributária"
+        ).pack(fill=tk.X)
 
-        file_row = ttk.Frame(self)
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Carregar e Analisar Planilha", self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Importar Tributação no ERP", self._iniciar_importacao, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        file_row = ttk.Frame(content)
         file_row.pack(fill=tk.X, pady=2)
 
         tk.Label(file_row, text="Arquivo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -75,7 +194,7 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
         self.ent_linha_ini.insert(0, "2")
         self.ent_linha_ini.pack(side=tk.LEFT, padx=2)
 
-        frame_map = ttk.LabelFrame(self, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
+        frame_map = ttk.LabelFrame(content, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
         frame_map.pack(fill=tk.X, pady=4)
 
         self.entradas_map = {}
@@ -90,14 +209,8 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
                 ent.grid(row=i_linha, column=col + 1, padx=(0, 5), pady=2, sticky=tk.W)
                 self.entradas_map[chave] = ent
 
-        actions_row = ttk.Frame(self)
+        actions_row = ttk.Frame(content)
         actions_row.pack(fill=tk.X, pady=4)
-
-        self.btn_analisar = tk.Button(actions_row, text="🔍 Carregar e Analisar Planilha",
-                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
-                                       cursor="hand2", padx=12, pady=1,
-                                       command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.LEFT, padx=5)
 
         ttk.Button(actions_row, text="☑ Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="☐ Desmarcar", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
@@ -108,7 +221,7 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
         self.lbl_status = ttk.Label(actions_row, text="Aguardando configuração...", font=("Segoe UI", 9), foreground="#555")
         self.lbl_status.pack(side=tk.LEFT, padx=2)
 
-        filter_row = ttk.Frame(self)
+        filter_row = ttk.Frame(content)
         filter_row.pack(fill=tk.X, pady=(2, 0))
 
         tk.Label(filter_row, text="Filtrar Status:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -118,7 +231,7 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
         self.cb_filtro_status.pack(side=tk.LEFT, padx=2)
         self.cb_filtro_status.bind("<<ComboboxSelected>>", self._filtrar_status)
 
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.colunas = ("SEL", "STATUS", "NCM", "DESCRIÇÃO", "ICMS", "PIS", "COFINS", "RT")
@@ -132,26 +245,13 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             self.tree.column(col, width=larg, anchor=tk.CENTER if col not in ("DESCRIÇÃO", "NCM") else tk.W)
 
-        self.tree.tag_configure('NOVO', background='#EAFAF1', foreground='#1E8449')
+        self.tree.tag_configure('NOVO', background='#EAFAF1', foreground='#16A34A')
         self.tree.tag_configure('OK', background='#FFFFFF', foreground='black')
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
-        footer.pack(fill=tk.X, pady=(4, 0))
-
-        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
-                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
-                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
-
-        self.btn_importar = tk.Button(footer, text="🚀 Importar Tributação no ERP", state=tk.DISABLED,
-                                       font=("Segoe UI", 9, "bold"), bg="#003399", fg="white",
-                                       cursor="hand2", padx=14, pady=2,
-                                       command=self._iniciar_importacao)
-        self.btn_importar.pack(side=tk.RIGHT, padx=3)
 
     def _salvar_config_mapeamento(self):
         secao = 'IMPORTACAO_TRIBUTACAO'
@@ -312,6 +412,13 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_preview(self, dados_erp, uf_padrao):
+        # Selo deste render. A grade e preenchida em blocos com after(), entao um
+        # render antigo pode continuar inserindo DEPOIS que outro limpou a tela —
+        # a grade acumula duas analises e os totais somam tudo. O selo faz os
+        # blocos do render antigo pararem.
+        self._render_seq = getattr(self, '_render_seq', 0) + 1
+        meu_seq = self._render_seq
+
         for i in self.tree.get_children():
             self.tree.delete(i)
         self.dados_grid.clear()
@@ -453,6 +560,8 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
         chunk_size = 30
 
         def render_chunk(start_idx):
+            if meu_seq != self._render_seq:
+                return  # um render mais novo assumiu a grade
             end_idx = min(start_idx + chunk_size, total)
             for i in range(start_idx, end_idx):
                 values, tag, reg = items[i]
@@ -539,6 +648,10 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
             if filtro == "Todos" or status == filtro:
                 self.tree.move(item_id, '', tk.END)
 
+    def _combo_key(self, uf, cst, aliq, red):
+        """Chave única de uma faixa de ICMS: UF + CST + alíquota + redução."""
+        return f"{str(uf).strip().upper()}|{cst}|{round(float(aliq or 0), 2)}|{round(float(red or 0), 2)}"
+
     def _iniciar_importacao(self):
         selecionados = []
         for item_id in self.tree.get_children():
@@ -554,14 +667,57 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
             f"Deseja importar a tributa\u00e7\u00e3o de {len(selecionados)} NCM(s) no ERP?\n\n"
             "Ser\u00e3o criadas faixas ICMS e regras RT se necess\u00e1rio,\n"
             "e os NCMs ser\u00e3o inseridos/atualizados na classifica\u00e7\u00e3o fiscal.")
-        if resp:
-            self._salvar_config_mapeamento()
-            self.btn_importar.config(state=tk.DISABLED)
-            self.btn_analisar.config(state=tk.DISABLED)
-            self.lbl_status.config(text="Importando tributação...")
-            threading.Thread(target=self._importacao_bg, args=(selecionados,), daemon=True).start()
+        if not resp:
+            return
 
-    def _importacao_bg(self, selecionados):
+        # Agrupa as faixas de ICMS a criar por combinacao (uma faixa por UF/CST/aliquota/reducao)
+        combos = {}
+        qtd_ok = 0
+        for reg in selecionados:
+            st = reg.get('_icms_status', '')
+            if st == 'CRIAR':
+                key = self._combo_key(reg['_icms_uf'], reg['_icms_cst'],
+                                      reg['_icms_aliquota'], reg['_icms_reducao'])
+                if key not in combos:
+                    combos[key] = {
+                        'key': key, 'uf': reg['_icms_uf'], 'cst': reg['_icms_cst'],
+                        'aliquota': reg['_icms_aliquota'], 'reducao': reg['_icms_reducao'], 'qtd': 0
+                    }
+                combos[key]['qtd'] += 1
+            elif st == 'OK':
+                qtd_ok += 1
+
+        faixa_map = {}
+        tipos_cf = ['CT', 'NC', 'SN']
+
+        if combos:
+            # Pre-preenche a tela de revisao com o proximo numero de faixa livre
+            try:
+                emp = self.config.get('IMPORTACAO', 'empresa', fallback='1')
+                fil = self.config.get('IMPORTACAO', 'filial', fallback='1')
+                with FirebirdService(self.config_db) as fb:
+                    res = fb.query(
+                        "SELECT COALESCE(MAX(CAST(AICMS_FAIXA AS INTEGER)), 0) + 1 AS NOVO "
+                        "FROM TABELA_ALIQUOTA_ICMS WHERE AICMS_EMPRESA = ? AND AICMS_FILIAL = ?",
+                        [emp, fil]
+                    )
+                    proximo = int(res[0]['novo']) if res else 1
+            except Exception as e:
+                return messagebox.showerror("Erro", f"Falha ao consultar o proximo numero de faixa:\n{e}")
+
+            dialog = DialogoRevisaoFaixas(self, list(combos.values()), qtd_ok, proximo)
+            self.wait_window(dialog)
+            if dialog.resultado is None:
+                return messagebox.showinfo("Cancelado", "Importacao cancelada pelo usuario.")
+            faixa_map = dialog.resultado
+
+        self._salvar_config_mapeamento()
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_analisar.config(state=tk.DISABLED)
+        self.lbl_status.config(text="Importando tributacao...")
+        threading.Thread(target=self._importacao_bg, args=(selecionados, faixa_map, tipos_cf), daemon=True).start()
+
+    def _importacao_bg(self, selecionados, faixa_map, tipos_cf):
         log_linhas = []
         try:
             emp = self.config.get('IMPORTACAO', 'empresa', fallback='1')
@@ -573,6 +729,30 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
                 criados_icms = 0
                 criados_rt = 0
                 erros = 0
+
+                # 1) Cria as faixas de ICMS novas confirmadas na tela de revisao
+                #    (uma faixa por combinacao UF/CST/aliquota/reducao, gravando CT/NC/SN)
+                faixas_criadas = {}
+                data_vig = "01/01/2025"
+                sufixos = {'CT': 'CONT', 'NC': 'NCONT', 'SN': 'SIMP_NAC'}
+                for combo_key, info in faixa_map.items():
+                    try:
+                        cols = ["AICMS_EMPRESA", "AICMS_FILIAL", "AICMS_DATA", "AICMS_FAIXA",
+                                "AICMS_ESTADO", "AICMS_COMPRA_VENDA"]
+                        vals = [emp, fil, data_vig, info['faixa'], info['uf'], 'V']
+                        for t in tipos_cf:
+                            s = sufixos[t]
+                            cols += [f"AICMS_SITUACAO_{s}", f"AICMS_ALIQUOTA_{s}", f"AICMS_REDUCAO_{s}"]
+                            vals += [info['cst'], info['aliquota'], info['reducao']]
+                        placeholders = ", ".join("?" for _ in vals)
+                        sql_ins_faixa = f"INSERT INTO TABELA_ALIQUOTA_ICMS ({', '.join(cols)}) VALUES ({placeholders})"
+                        fb.execute(sql_ins_faixa, vals)
+                        faixas_criadas[combo_key] = str(info['faixa'])
+                        criados_icms += 1
+                        log_linhas.append(f"OK Faixa ICMS {info['faixa']} criada para {info['uf']} CST {info['cst']} ({'/'.join(tipos_cf)})")
+                    except Exception as e:
+                        erros += 1
+                        log_linhas.append(f"ERRO ao criar faixa ICMS {info.get('faixa')} ({info.get('uf')} CST {info.get('cst')}): {e}")
 
                 for reg in selecionados:
                     try:
@@ -588,26 +768,10 @@ class TelaImportacaoPlanilhaTributacao(ttk.Frame):
                         rt_id = reg.get('_rt_id', '')
 
                         if icms_status == "CRIAR":
-                            uf = reg['_icms_uf']
-                            cst = reg['_icms_cst']
-                            aliq = reg['_icms_aliquota']
-                            red = reg['_icms_reducao']
-
-                            res = fb.query(
-                                "SELECT COALESCE(MAX(CAST(AICMS_FAIXA AS INTEGER)), 0) + 1 AS NOVO FROM TABELA_ALIQUOTA_ICMS WHERE AICMS_EMPRESA = ? AND AICMS_FILIAL = ?",
-                                [emp, fil]
-                            )
-                            nova_faixa = str(int(res[0]['novo']))
-                            data_vig = "01/01/2025"
-
-                            sql_icms_ins = """INSERT INTO TABELA_ALIQUOTA_ICMS
-                                (AICMS_EMPRESA, AICMS_FILIAL, AICMS_DATA, AICMS_FAIXA, AICMS_ESTADO,
-                                 AICMS_COMPRA_VENDA, AICMS_SITUACAO_CONT, AICMS_ALIQUOTA_CONT, AICMS_REDUCAO_CONT)
-                                VALUES (?, ?, ?, ?, ?, 'V', ?, ?, ?)"""
-                            fb.execute(sql_icms_ins, [emp, fil, data_vig, nova_faixa, uf, cst, aliq, red])
-                            icms_faixa = nova_faixa
-                            criados_icms += 1
-                            log_linhas.append(f"✅ Faixa ICMS {nova_faixa} criada para {uf} CST {cst}")
+                            # A faixa ja foi criada acima (uma por combinacao). Aqui so buscamos o numero.
+                            combo_key = self._combo_key(reg['_icms_uf'], reg['_icms_cst'],
+                                                        reg['_icms_aliquota'], reg['_icms_reducao'])
+                            icms_faixa = faixas_criadas.get(combo_key)
 
                         if rt_status == "CRIAR":
                             rt_class = reg['_rt_class']

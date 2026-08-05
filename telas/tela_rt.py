@@ -9,6 +9,7 @@ import logging
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 from utils.importer import FirebirdImporter
+from utils import tema
 
 REGRAS_RT_MAP = {
     "000001": {"descricao": "Situações tributadas integralmente pelo IBS e CBS", "red_ibs": "0%", "red_cbs": "0%", "regra": "Tributação Integral"},
@@ -48,10 +49,7 @@ class DialogoExportarRt(tk.Toplevel):
         
         largura = int(self.winfo_screenwidth() * 0.95)
         altura = int(self.winfo_screenheight() * 0.85)
-        x = int((self.winfo_screenwidth() - largura) / 2)
-        y = int((self.winfo_screenheight() - altura) / 2)
-        self.geometry(f"{largura}x{altura}+{x}+{y}")
-            
+
         icon_path = self.resource_path("icon.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
@@ -63,14 +61,15 @@ class DialogoExportarRt(tk.Toplevel):
         
         self._criar_widgets()
         self._carregar_config_iniciais()
-        
+        tema.centralizar(self, largura, altura)
+
     def resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
         except Exception:
             base_path = os.path.abspath(".")
         return os.path.join(base_path, relative_path)
-        
+
     def _criar_widgets(self):
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -281,7 +280,8 @@ class DialogoRegrasRtExistentes(tk.Toplevel):
         self.fb_config = fb_config
         self._criar_widgets()
         self._carregar_dados()
-        
+        tema.centralizar(self, w, h)
+
     def resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
@@ -399,36 +399,54 @@ class TelaRt(ttk.Frame):
         self._criar_widgets()
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="REFORMA TRIBUTÁRIA (IBS/CBS)", font=("Segoe UI", 14, "bold"), fg="#F012BE")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Reforma Tributária (RT)",
+            "Construção e auditoria das regras de IBS e CBS a partir dos XMLs"
+        ).pack(fill=tk.X)
 
-        frame_dir = ttk.Frame(self)
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Analisar XMLs", self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_ver_regras = tema.botao_sidebar(sidebar, "👁   Ver Regras no ERP", self._ver_regras_existentes)
+        self.btn_ver_regras.pack(fill=tk.X)
+
+        self.btn_exportar = tema.botao_sidebar(sidebar, "🚀   Enviar Selecionados p/ ERP", self._preparar_exportacao, cor_fg="#7EE0A0")
+        self.btn_exportar.config(state=tk.DISABLED)
+        self.btn_exportar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        frame_dir = ttk.Frame(content)
         frame_dir.pack(fill=tk.X, pady=10)
-        
+
         self.ent_pasta = ttk.Entry(frame_dir, width=60)
         self.ent_pasta.pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar XMLs", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.RIGHT, padx=5)
-        
-        self.btn_ver_regras = ttk.Button(frame_dir, text="👁 Ver Regras no ERP", command=self._ver_regras_existentes)
-        self.btn_ver_regras.pack(side=tk.RIGHT, padx=5)
 
-        self.lbl_status = ttk.Label(self, text="Aguardando importação...", font=("Segoe UI", 9))
+        self.lbl_status = ttk.Label(content, text="Aguardando importação...", font=("Segoe UI", 9))
         self.lbl_status.pack(anchor=tk.W)
 
-        # Rodapé
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        self.btn_exportar = ttk.Button(frame_fim, text="🚀 Enviar Selecionados p/ ERP", state=tk.DISABLED, command=self._preparar_exportacao)
-        self.btn_exportar.pack(side=tk.RIGHT, padx=5)
-
         # Grade
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")

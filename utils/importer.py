@@ -67,7 +67,19 @@ class FirebirdImporter:
                             MATCHING (TPU_PROD_EMPRESA, TPU_PROD_FILIAL, TPU_PRODUTO, TPU_COD_UNIDADE)
                         """
                         cur.execute(sql_unid, [prod.get('PRODUTO_EMPRESA', 1), prod.get('PRODUTO_FILIAL', 1), codigo_produto, cod_unidade])
-                    
+
+                        # Salva o codigo de barras (EAN) na tabela de barras;
+                        # senao a tela geral de produtos nao exibe o EAN.
+                        cbarra = str(prod.get('PRODUTO_CBARRA') or '').strip()
+                        if cbarra and str(codigo_produto).strip().isdigit():
+                            cur.execute(
+                                "UPDATE OR INSERT INTO TABELA_PRODUTO_CBARRA "
+                                "(PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA, PCB_QTDE_PACK) "
+                                "VALUES (?, ?, ?, ?, 1) "
+                                "MATCHING (PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA)",
+                                [prod.get('PRODUTO_EMPRESA', 1), prod.get('PRODUTO_FILIAL', 1), int(codigo_produto), cbarra[:128]]
+                            )
+
                     if progress_callback and (i % 25 == 0 or i == total - 1):
                         progress_callback(i + 1, total)
                 except Exception as e:
@@ -108,6 +120,17 @@ class FirebirdImporter:
                     
                     valores.append(codigo)
                     cur.execute(sql, valores)
+
+                    # Codigo de barras (EAN) na tabela de barras (tela geral)
+                    cbarra = str(prod.get('PRODUTO_CBARRA') or '').strip()
+                    if cbarra and str(codigo).strip().isdigit():
+                        cur.execute(
+                            "UPDATE OR INSERT INTO TABELA_PRODUTO_CBARRA "
+                            "(PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA, PCB_QTDE_PACK) "
+                            "VALUES (?, ?, ?, ?, 1) "
+                            "MATCHING (PCB_EMPRESA, PCB_FILIAL, PCB_PRODUTO, PCB_CBARRA)",
+                            [prod.get('PRODUTO_EMPRESA', 1), prod.get('PRODUTO_FILIAL', 1), int(codigo), cbarra[:128]]
+                        )
                     atualizados += 1
                     
                     if atualizados % 100 == 0:

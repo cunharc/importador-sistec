@@ -5,6 +5,7 @@ import configparser
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from utils.logger import get_logger
+from utils import multivalor
 
 _log = get_logger('xml_reader')
 
@@ -98,6 +99,8 @@ def _parse_det(det_element: ET.Element) -> Dict[str, Any]:
             ipi_node = ipi.find('nfe:IPITrib', ns) or ipi.find('nfe:IPINT', ns) or (len(ipi) > 0 and ipi[-1])
             if ipi_node is not None:
                 item['ipi_cst'] = _get(ipi_node, 'CST')
+                # Alíquota só existe no IPITrib; no IPINT (não tributado, ex.: CST 53) fica 0.
+                item['p_ipi'] = _get_float(ipi_node, 'pIPI')
 
         # Créditos presumidos
         cred_presumidos = []
@@ -421,7 +424,9 @@ def ler_nfe(xml_path: str) -> List[Dict[str, Any]]:
             end_data = _extrair_endereco_completo(ender_dest, ns)
             ie_dest = _get(dest, 'IE') or ''
             ind_iedest = _get(dest, 'indIEDest') or '9'
-            email = _get(dest, 'email')
+            # a tag <email> do XML também vem com dois endereços separados por
+            # vírgula em nota emitida por sistema que não valida o campo
+            email = multivalor.um_email(_get(dest, 'email'))[0]
             
             reg = {
                 'tipo': 'Cliente',
@@ -473,9 +478,17 @@ def parse_nfe(xml_path: str) -> Dict[str, Any]:
     config = configparser.ConfigParser()
     config.read('config.ini', encoding='utf-8')
     uf_emit = config.get('IMPORTACAO', 'uf', fallback='N/I')
-    
+
+    # UF do emitente vinda do próprio XML (para o fallback interno da NFC-e)
+    ender_emit = inf_nfe.find('.//nfe:enderEmit', ns) or inf_nfe.find('.//enderEmit')
+    uf_emit_xml = _get(ender_emit, 'UF') if ender_emit is not None else None
+
     ender_dest = inf_nfe.find('.//nfe:enderDest', ns) or inf_nfe.find('.//enderDest')
-    uf_dest = _get(ender_dest, 'UF') if ender_dest is not None else 'EX'
+    uf_dest = _get(ender_dest, 'UF') if ender_dest is not None else None
+    if not uf_dest:
+        # NFC-e / venda a consumidor não traz enderDest → operação interna:
+        # assume a UF do emitente (do XML; senão a configurada).
+        uf_dest = uf_emit_xml or (uf_emit if uf_emit != 'N/I' else 'EX')
 
     ide = inf_nfe.find('.//nfe:ide', ns) or inf_nfe.find('.//ide')
     nnf = _get(ide, 'nNF') if ide is not None else ''

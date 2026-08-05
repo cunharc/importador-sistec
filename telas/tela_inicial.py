@@ -25,10 +25,21 @@ from telas.tela_importacao_planilha_receber import TelaImportacaoPlanilhaReceber
 from telas.tela_importacao_planilha_pagar import TelaImportacaoPlanilhaPagar
 from telas.tela_importacao_planilha_lista_precos import TelaImportacaoPlanilhaListaPrecos
 from telas.tela_importacao_planilha_tributacao import TelaImportacaoPlanilhaTributacao
+from telas.tela_importacao_planilha_estoque_producao import TelaImportacaoPlanilhaEstoqueProducao
+from telas.tela_importacao_nfe import TelaImportacaoNFe
+from telas.tela_duplicar_empresa import TelaDuplicarEmpresa
+from telas.tela_vinculo_cc import TelaVinculoCC
 from busca_logs import BuscaLogsWindow
 from utils.firebird_service import FirebirdService
-from utils.updater import verificar_e_atualizar
+from utils.updater import (verificar_e_atualizar, verificar_em_segundo_plano,
+                           perguntar_atualizacao)
+from utils import tema
 from version import get_info
+
+# Cores do sidebar (navy profundo da identidade Sistecweb)
+_SIDEBAR = "#141132"
+_SIDEBAR_HOVER = "#232152"
+_SIDEBAR_ACTIVE = "#2E2C6E"
 
 class TelaInicial(tk.Frame):
     def __init__(self, parent):
@@ -52,100 +63,255 @@ class TelaInicial(tk.Frame):
         return os.path.join(base_path, relative_path)
 
     def _criar_widgets(self):
-        # --- CABEÇALHO ---
-        header = tk.Frame(self, bg="#FFFFFF", height=80, highlightbackground="#CCCCCC", highlightthickness=1)
-        header.pack(fill=tk.X, side=tk.TOP)
-        
-        logo_path = self.resource_path("sistec.jpg")
+        self.categoria_atual = 'todos'
+        self.nav_botoes = {}
+
+        AZUL = tema.SISTEC_BLUE
+        BASE = tema.BG_BASE
+        TXT = tema.TEXT
+        TXT2 = tema.TEXT_SECOND
+
+        # ===================== TOPBAR =====================
+        topbar = tk.Frame(self, bg=AZUL, height=62)
+        topbar.pack(fill=tk.X, side=tk.TOP)
+        topbar.pack_propagate(False)
+
+        left = tk.Frame(topbar, bg=AZUL)
+        left.pack(side=tk.LEFT, padx=16)
+        logo_path = self.resource_path("Logo oficial grupos - Sistec.png")
         if os.path.exists(logo_path):
             try:
                 img = Image.open(logo_path)
-                img.thumbnail((200, 80))
+                img.thumbnail((46, 46))
                 self.logo_img = ImageTk.PhotoImage(img)
-                tk.Label(header, image=self.logo_img, bg="#FFFFFF").pack(side=tk.LEFT, padx=20, pady=10)
+                tk.Label(left, image=self.logo_img, bg=AZUL).pack(side=tk.LEFT, pady=8)
             except Exception:
                 pass
-                
-        tk.Label(header, text="CENTRAL DE IMPLANTAÇÃO", font=("Segoe UI", 16, "bold"), bg="#FFFFFF", fg="#003399").pack(side=tk.LEFT, padx=20)
-        
-        # --- STATUS DA CONEXÃO NO HEADER ---
-        status_frame = tk.Frame(header, bg="#FFFFFF")
-        status_frame.pack(side=tk.RIGHT, padx=10)
-        
-        # Versão no header
-        tk.Label(header, text=get_info(), font=("Segoe UI", 9), bg="#FFFFFF", fg="#666666").pack(side=tk.RIGHT, padx=5, anchor=tk.SE)
-        
-        # Botão Configurar Banco embalado primeiro (à direita) para nunca sumir em monitores pequenos
-        btn_config_db = tk.Button(status_frame, text="⚙ Configurar Banco", font=("Segoe UI", 9), bg="#F0F0F0", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", command=self._abrir_config_banco)
-        btn_config_db.pack(side=tk.RIGHT, padx=5)
+        tk.Label(left, text="Central de Implantação", font=("Segoe UI", 15, "bold"),
+                 bg=AZUL, fg="white").pack(side=tk.LEFT, padx=(12, 0))
 
-        # Combo para Empresa/Filial com tamanho reduzido para telas menores
-        self.cb_filial = ttk.Combobox(status_frame, width=25, state="readonly", cursor="hand2")
-        self.cb_filial.pack(side=tk.RIGHT, padx=5)
+        right = tk.Frame(topbar, bg=AZUL)
+        right.pack(side=tk.RIGHT, padx=16)
+
+        tk.Label(right, text=get_info(), font=("Segoe UI", 8),
+                 bg=AZUL, fg="#9A9CD8").pack(side=tk.RIGHT, padx=(12, 0))
+
+        btn_config_db = tk.Button(right, text="⚙  Configurar Banco", font=("Segoe UI", 9, "bold"),
+                                  bg="#2E2C6E", fg="white", activebackground="#3A3888",
+                                  activeforeground="white", relief=tk.FLAT, bd=0,
+                                  cursor="hand2", padx=12, pady=4, command=self._abrir_config_banco)
+        btn_config_db.pack(side=tk.RIGHT, padx=(12, 0))
+
+        self.cb_filial = ttk.Combobox(right, width=26, state="readonly", cursor="hand2")
+        self.cb_filial.pack(side=tk.RIGHT, padx=(12, 0))
         self.cb_filial.bind("<<ComboboxSelected>>", self._salvar_filial_selecionada)
         self.filiais_data = []
-        
-        status_labels = tk.Frame(status_frame, bg="#FFFFFF")
-        status_labels.pack(side=tk.RIGHT, padx=5)
-        
-        self.lbl_status_db = tk.Label(status_labels, text="Verificando...", font=("Segoe UI", 10, "bold"), bg="#FFFFFF", fg="#F39C12")
+
+        status_labels = tk.Frame(right, bg=AZUL)
+        status_labels.pack(side=tk.RIGHT)
+        self.lbl_status_db = tk.Label(status_labels, text="Verificando...", font=("Segoe UI", 10, "bold"),
+                                      bg=AZUL, fg="#FACC15")
         self.lbl_status_db.pack(anchor=tk.E)
-        self.lbl_path_db = tk.Label(status_labels, text="", font=("Segoe UI", 8), bg="#FFFFFF", fg="#7F8C8D")
+        self.lbl_path_db = tk.Label(status_labels, text="", font=("Segoe UI", 8), bg=AZUL, fg="#9A9CD8")
         self.lbl_path_db.pack(anchor=tk.E)
-        
-        # Atualiza o status de conexão ao abrir a central
+
+        # ===================== CORPO =====================
+        body = tk.Frame(self, bg=BASE)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # -------- SIDEBAR --------
+        sidebar = tk.Frame(body, bg=_SIDEBAR, width=214)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        sidebar.pack_propagate(False)
+
+        rodape_sb = tk.Frame(sidebar, bg=_SIDEBAR)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self._nav_item(rodape_sb, "⎋", "Sair do sistema", self.parent.quit)
+
+        tk.Label(sidebar, text="NAVEGAÇÃO", font=("Segoe UI", 8, "bold"),
+                 bg=_SIDEBAR, fg="#6E6FA8", anchor="w", padx=18).pack(fill=tk.X, pady=(16, 4))
+        cats = [("📋", "Todos", "todos"), ("📊", "Excel", "excel"),
+                ("📄", "XML", "xml"), ("🧰", "Outros", "outros")]
+        for emoji, nome, chave in cats:
+            n = len(self._filtrar_modulos(chave, ""))
+            self._nav_item(sidebar, emoji, f"{nome}  ({n})",
+                           lambda c=chave: self._aplicar_filtro(c), chave=chave)
+
+        tk.Frame(sidebar, bg="#2A2A55", height=1).pack(fill=tk.X, padx=16, pady=(14, 0))
+        tk.Label(sidebar, text="AÇÕES", font=("Segoe UI", 8, "bold"),
+                 bg=_SIDEBAR, fg="#6E6FA8", anchor="w", padx=18).pack(fill=tk.X, pady=(12, 4))
+        self._nav_item(sidebar, "📖", "Sobre o sistema", self._abrir_sobre)
+        self._nav_item(sidebar, "📄", "Ver logs de hoje", self._abrir_logs)
+        self.item_atualizar = self._nav_item(
+            sidebar, "🔄", "Atualizar sistema",
+            lambda: verificar_e_atualizar(self.winfo_toplevel()))
+
+        # Aviso discreto de versão nova. Aparece só quando existe, some quando o
+        # usuário dispensa, e nunca interrompe o trabalho: o sistema abre normal e a
+        # consulta acontece em segundo plano. Quem decide atualizar é ele.
+        self.aviso_versao = tk.Frame(sidebar, bg=_SIDEBAR)
+        self._release_pendente = None
+        self.after(2500, self._checar_versao_nova)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(body, bg=BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=18, pady=16)
+
+        head = tk.Frame(content, bg=BASE)
+        head.pack(fill=tk.X, pady=(0, 14))
+        tk.Label(head, text="Módulos", font=("Segoe UI", 18, "bold"), bg=BASE, fg=TXT).pack(side=tk.LEFT)
+        self.lbl_subtitulo = tk.Label(head, text="", font=("Segoe UI", 10), bg=BASE, fg=TXT2)
+        self.lbl_subtitulo.pack(side=tk.LEFT, padx=(12, 0))
+
+        busca_wrap = tk.Frame(head, bg=tema.CARD, highlightbackground=tema.BORDER, highlightthickness=1)
+        busca_wrap.pack(side=tk.RIGHT)
+        tk.Label(busca_wrap, text="🔎", bg=tema.CARD, fg=TXT2).pack(side=tk.LEFT, padx=(8, 2))
+        self.ent_busca = tk.Entry(busca_wrap, width=28, relief=tk.FLAT, bg=tema.CARD, fg=TXT,
+                                  font=("Segoe UI", 10))
+        self.ent_busca.pack(side=tk.LEFT, ipady=4, padx=(0, 6))
+        self.ent_busca.bind("<KeyRelease>", lambda e: self._render_cards())
+
+        # área de cards com rolagem (Canvas + Scrollbar)
+        cards_wrap = tk.Frame(content, bg=BASE)
+        cards_wrap.pack(fill=tk.BOTH, expand=True)
+        self.cards_canvas = tk.Canvas(cards_wrap, bg=BASE, highlightthickness=0)
+        vsb = ttk.Scrollbar(cards_wrap, orient="vertical", command=self.cards_canvas.yview)
+        self.cards_canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.cards_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._cols_atual = 0  # nº de colunas renderizadas (p/ re-render só quando muda)
+        self.card_container = tk.Frame(self.cards_canvas, bg=BASE)
+        self._card_window = self.cards_canvas.create_window((0, 0), window=self.card_container, anchor="nw")
+        self.card_container.bind(
+            "<Configure>",
+            lambda e: self.cards_canvas.configure(scrollregion=self.cards_canvas.bbox("all")))
+        self.cards_canvas.bind("<Configure>", self._on_canvas_resize)
+        self.cards_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+        self._restyle_nav()
+        self._render_cards()
         self.after(800, self._atualizar_status)
 
-        # --- CONTEÚDO PRINCIPAL ---
-        content = tk.Frame(self, bg="#F0F0F0")
-        content.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        tk.Label(content, text="Módulos Disponíveis", font=("Segoe UI", 14), bg="#F0F0F0", fg="#1A1A1A").pack(anchor=tk.W, pady=(0, 10))
+    def _calc_cols(self, largura):
+        # largura mínima confortável por card (inclui os paddings da célula)
+        CARD_MIN = 300
+        if largura <= 0:
+            return 3
+        return max(2, min(6, largura // CARD_MIN))
 
-        filtros_frame = tk.Frame(content, bg="#F0F0F0")
-        filtros_frame.pack(fill=tk.X, pady=(0, 15))
+    def _on_canvas_resize(self, event):
+        # ajusta a largura da área interna e re-renderiza só se o nº de colunas mudou
+        self.cards_canvas.itemconfig(self._card_window, width=event.width)
+        novo = self._calc_cols(event.width)
+        if novo != self._cols_atual:
+            self._cols_atual = novo
+            self._render_cards()
 
-        self.filtro_botoes = {}
-        for f_texto, f_chave in [("📋 TODOS", "todos"), ("📊 EXCEL", "excel"), ("📄 XML", "xml")]:
-            btn = tk.Button(filtros_frame, text=f_texto,
-                            font=("Segoe UI", 10), bg="#E0E0E0", fg="#1A1A1A",
-                            relief=tk.FLAT, cursor="hand2", padx=20, pady=5,
-                            command=lambda f=f_chave: self._aplicar_filtro(f))
-            btn.pack(side=tk.LEFT, padx=3)
-            self.filtro_botoes[f_chave] = btn
+    def _on_mousewheel(self, event):
+        # só rola quando a central está visível (evita interferir nos módulos abertos)
+        try:
+            if self.cards_canvas.winfo_ismapped():
+                self.cards_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
 
-        self.card_container = tk.Frame(content, bg="#F0F0F0")
-        self.card_container.pack(fill=tk.BOTH, expand=True)
+    def _nav_item(self, parent, icone, texto, comando, chave=None):
+        it = tk.Frame(parent, bg=_SIDEBAR, cursor="hand2")
+        it.pack(fill=tk.X)
+        # faixa de destaque à esquerda (indica item ativo)
+        strip = tk.Frame(it, bg=_SIDEBAR, width=4)
+        strip.pack(side=tk.LEFT, fill=tk.Y)
+        # coluna FIXA para o ícone: garante que todo texto comece no mesmo x,
+        # independente da largura de cada emoji
+        ico_wrap = tk.Frame(it, bg=_SIDEBAR, width=26)
+        ico_wrap.pack(side=tk.LEFT, fill=tk.Y, padx=(14, 0))
+        ico_wrap.pack_propagate(False)
+        lbl_ic = tk.Label(ico_wrap, text=icone, font=("Segoe UI", 12), bg=_SIDEBAR, fg="#B9BBE0")
+        # alinhado à ESQUERDA (borda esquerda igual p/ todos) e centralizado na vertical
+        lbl_ic.place(relx=0.0, rely=0.5, anchor="w")
+        lbl = tk.Label(it, text=texto, font=("Segoe UI", 10, "bold"), bg=_SIDEBAR, fg="#B9BBE0", anchor="w")
+        lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 12), pady=10)
+        grupo = (it, strip, ico_wrap, lbl_ic, lbl)
+        for w in grupo:
+            w.bind("<Button-1>", lambda e: comando())
 
-        self.card_frames = {}
-        for categoria in ('todos', 'excel', 'xml'):
-            frame_cat = self._criar_grade_filtrada(self.card_container, categoria)
-            self.card_frames[categoria] = frame_cat
+        def enter(e):
+            if chave != self.categoria_atual:
+                for w in (it, ico_wrap, lbl_ic, lbl):
+                    w.config(bg=_SIDEBAR_HOVER)
+                strip.config(bg=_SIDEBAR_HOVER)
 
-        self._aplicar_filtro('todos')
+        def leave(e):
+            self._restyle_nav()
+            if chave is None:
+                for w in (it, ico_wrap, lbl_ic, lbl):
+                    w.config(bg=_SIDEBAR)
+                strip.config(bg=_SIDEBAR)
 
-        # --- RODAPÉ ---
-        bottom_frame = tk.Frame(self, bg="#F0F0F0")
-        bottom_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=20, padx=20)
-        
-        btn_sobre = tk.Button(bottom_frame, text="ℹ️ Sobre o Sistema", font=("Segoe UI", 10), bg="#FFFFFF", fg="#003399", relief=tk.SOLID, bd=1, cursor="hand2", padx=15, pady=5, command=self._abrir_sobre)
-        btn_sobre.pack(side=tk.LEFT)
+        for w in grupo:
+            w.bind("<Enter>", enter)
+            w.bind("<Leave>", leave)
+        if chave is not None:
+            self.nav_botoes[chave] = (it, strip, ico_wrap, lbl_ic, lbl)
+        return it
 
-        btn_logs = tk.Button(bottom_frame, text="📄 Ver Logs de Hoje", font=("Segoe UI", 10), bg="#FFFFFF", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", padx=15, pady=5, command=self._abrir_logs)
-        btn_logs.pack(side=tk.LEFT, padx=(10, 0))
+    # ------------------------------------------------- AVISO DE VERSÃO NOVA
+    def _checar_versao_nova(self):
+        """Consulta o GitHub em segundo plano, 2,5s depois de abrir.
 
-        btn_update = tk.Button(bottom_frame, text="🔄 Atualizar Sistema", font=("Segoe UI", 10, "bold"), bg="#27AE60", fg="#FFFFFF", relief=tk.SOLID, bd=1, cursor="hand2", padx=15, pady=5, command=lambda: verificar_e_atualizar(self.winfo_toplevel()))
-        btn_update.pack(side=tk.LEFT, padx=(10, 0))
+        O atraso é para o sistema aparecer na tela primeiro: consulta de rede na
+        abertura é o tipo de coisa que faz o programa parecer travado.
+        """
+        try:
+            verificar_em_segundo_plano(self.winfo_toplevel(), self._mostrar_aviso_versao)
+        except Exception:
+            pass          # sem internet o sistema abre normal, sem reclamar
 
-        btn_fechar = tk.Button(bottom_frame, text="Sair do Sistema", font=("Segoe UI", 10), bg="#FFFFFF", fg="#1A1A1A", relief=tk.SOLID, bd=1, cursor="hand2", padx=15, pady=5, command=self.parent.quit)
-        btn_fechar.pack(side=tk.RIGHT)
+    def _mostrar_aviso_versao(self, release):
+        if not self.winfo_exists():
+            return
+        self._release_pendente = release
+        for w in self.aviso_versao.winfo_children():
+            w.destroy()
 
-    def _criar_grade_filtrada(self, parent, filtro):
-        modulos = [
+        faixa = tk.Frame(self.aviso_versao, bg="#2E2C6E", cursor="hand2")
+        faixa.pack(fill=tk.X, padx=10, pady=(10, 0))
+        tk.Label(faixa, text=f"🔔  Versão {release['versao']} disponível",
+                 font=("Segoe UI", 9, "bold"), bg="#2E2C6E", fg="#FFD48A",
+                 anchor="w", padx=8, pady=6, cursor="hand2").pack(fill=tk.X)
+        tk.Label(faixa, text="clique para ver o que mudou",
+                 font=("Segoe UI", 8), bg="#2E2C6E", fg="#B9BBE0",
+                 anchor="w", padx=8, cursor="hand2").pack(fill=tk.X, pady=(0, 6))
+
+        def abrir(_e=None):
+            perguntar_atualizacao(self.winfo_toplevel(), self._release_pendente)
+
+        for w in (faixa,) + tuple(faixa.winfo_children()):
+            w.bind("<Button-1>", abrir)
+        self.aviso_versao.pack(fill=tk.X)
+
+    def _restyle_nav(self):
+        for chave, (it, strip, ico_wrap, lbl_ic, lbl) in self.nav_botoes.items():
+            if chave == self.categoria_atual:
+                for w in (it, ico_wrap, lbl_ic, lbl):
+                    w.config(bg=_SIDEBAR_ACTIVE)
+                lbl.config(fg="white")
+                lbl_ic.config(fg="white")
+                strip.config(bg=tema.SISTEC_ORANGE)
+            else:
+                for w in (it, ico_wrap, lbl_ic, lbl):
+                    w.config(bg=_SIDEBAR)
+                lbl.config(fg="#B9BBE0")
+                lbl_ic.config(fg="#B9BBE0")
+                strip.config(bg=_SIDEBAR)
+
+    def _lista_modulos(self):
+        return [
             ("Plano de Contas", "Importação estruturada do plano de contas via planilha Excel diretamente para o banco de dados Firebird.",
-             "#C8001E", "_abrir_importacao", "Icone_plano.jpg", "📑", ("excel",)),
+             "#C8001E", "_abrir_importacao", None, "📑", ("excel",)),
             ("Clientes/Fornec. NF-e", "Importação automática de clientes e fornecedores via leitura de arquivos XML de Notas Fiscais (NF-e 4.00).",
-             "#F39C12", "_abrir_nfe", "nfe_cli.jpg", "👥", ("xml",)),
+             "#F39C12", "_abrir_nfe", None, "👥", ("xml",)),
             ("Faixas de ICMS", "Construção e auditoria das regras de ICMS por estado baseado no histórico de XMLs.",
              "#8E44AD", "_abrir_icms", None, "🗺️", ("xml",)),
             ("Tributação por NCM", "Gestão de regras tributárias e alíquotas baseadas na Nomenclatura Comum do Mercosul.",
@@ -153,7 +319,7 @@ class TelaInicial(tk.Frame):
             ("Tributação CFOP", "Definição de naturezas de operação e regras contábeis por CFOP.",
              "#D35400", "_abrir_cfop", None, "🚚", ("xml",)),
             ("Produtos & Consolidado", "Auditoria final por produto, cruzando NCM, CFOP e ICMS para cadastro e correção.",
-             "#27AE60", "_abrir_xml_produtos", "xml_produtos.jpg", "📦", ("xml",)),
+             "#27AE60", "_abrir_xml_produtos", None, "📦", ("xml",)),
             ("Reforma Tributária (RT)", "Construção e auditoria das regras de IBS e CBS baseadas nos XMLs.",
              "#F012BE", "_abrir_rt", None, "🏛️", ("xml",)),
             ("Lista de Preços XML", "Crie ou atualize Listas de Preços de Venda capturando automaticamente o valor unitário dos XMLs.",
@@ -165,9 +331,9 @@ class TelaInicial(tk.Frame):
             ("Auditoria por Produto", "Auditoria cruzando todas as variações de tributação que um mesmo produto sofreu nos XMLs.",
              "#8E44AD", "_abrir_auditoria_produto", None, "🔎", ("xml",)),
             ("Busca em Logs ERP", "Varredura avançada e rápida em arquivos .txt de log gerados pelo ERP.",
-             "#F39C12", "_abrir_busca_logs", None, "🕵️‍♂️", ()),
+             "#F39C12", "_abrir_busca_logs", None, "🕵️", ("outros",)),
             ("Importar Clientes (Excel)", "Importação de clientes com mapeamento de colunas via planilha (XLSX/CSV) para cadastro no ERP.",
-             "#003399", "_abrir_importacao_planilha_clientes", None, "👤", ("excel",)),
+             "#14146E", "_abrir_importacao_planilha_clientes", None, "👤", ("excel",)),
             ("Importar Contas a Receber (Excel)", "Importação de títulos e parcelas de contas a receber com mapeamento de colunas via planilha (XLSX/CSV).",
              "#E67E22", "_abrir_importacao_planilha_receber", None, "💰", ("excel",)),
             ("Importar Contas a Pagar (Excel)", "Importação de títulos e parcelas de contas a pagar com mapeamento de colunas via planilha (XLSX/CSV).",
@@ -176,120 +342,113 @@ class TelaInicial(tk.Frame):
              "#E67E22", "_abrir_importacao_planilha_lista_precos", None, "📊", ("excel",)),
             ("Importar Tributação (Excel)", "Importação completa de tributação por NCM via planilha: ICMS, PIS, COFINS e Reforma Tributária com criação de faixas e regras.",
              "#F012BE", "_abrir_importacao_planilha_tributacao", None, "📋", ("excel",)),
+            ("Importar Estoque de Produção (Excel)", "Importação do estoque de Produto Acabado por etiquetas: gera a Ordem de Desossa de inventário, os itens PA e as pesagens (etiqueta, peso, validade e produção).",
+             "#0E7490", "_abrir_importacao_planilha_estoque_producao", None, "🏭", ("excel",)),
+            ("Importar Notas Fiscais (XML)", "Traz notas de emissão própria (entrada e saída) dos XMLs para o ERP. Valida em fases: cliente/fornecedor, natureza de operação (fluxo de caixa, contábil) e produto — cadastrando o que faltar — e grava a nota com itens, impostos, parcelas e o título no financeiro. Não movimenta estoque.",
+             "#1F6F8B", "_abrir_importacao_nfe", None, "🧾", ("xml",)),
+            ("Duplicar / Configurar Empresa", "Clona uma empresa/filial existente (EMPRESA, PARAM, FILIAL, CONFIG NF-e) e permite ajustar cada configuração campo a campo antes de gravar.",
+             "#6C3483", "_abrir_duplicar_empresa", None, "⧉", ("outros",)),
+            ("Vínculo CC × Plano de Contas", "Vincula os centros de custo às contas do plano (contabilização automática) em massa, estilo planilha, com árvore de CC e busca do plano.",
+             "#117A65", "_abrir_vinculo_cc", None, "🔗", ("outros",)),
         ]
 
-        if filtro == 'todos':
-            selecionados = modulos
-        else:
-            selecionados = [m for m in modulos if filtro in m[6]]
+    def _filtrar_modulos(self, categoria, texto):
+        txt = (texto or "").strip().lower()
+        res = []
+        for m in self._lista_modulos():
+            if categoria != 'todos' and categoria not in m[6]:
+                continue
+            if txt and txt not in m[0].lower() and txt not in m[1].lower():
+                continue
+            res.append(m)
+        return res
 
-        frame = tk.Frame(parent, bg="#F0F0F0")
+    def _render_cards(self):
+        for w in self.card_container.winfo_children():
+            w.destroy()
 
-        if not selecionados:
-            return frame
+        texto = self.ent_busca.get() if hasattr(self, 'ent_busca') else ""
+        mods = self._filtrar_modulos(self.categoria_atual, texto)
+        self.lbl_subtitulo.config(text=f"{len(mods)} módulo(s) disponível(is)")
 
-        cols = 3
-        rows = (len(selecionados) + cols - 1) // cols
+        if not mods:
+            tk.Label(self.card_container, text="Nenhum módulo encontrado para esta busca.",
+                     font=("Segoe UI", 11), bg=tema.BG_BASE, fg=tema.TEXT_SECOND).pack(pady=40)
+            return
 
+        cols = self._cols_atual or self._calc_cols(self.cards_canvas.winfo_width())
+        grid = tk.Frame(self.card_container, bg=tema.BG_BASE)
+        grid.pack(fill=tk.BOTH, expand=True)
         for i in range(cols):
-            frame.grid_columnconfigure(i, weight=1, uniform="col", minsize=280)
+            grid.grid_columnconfigure(i, weight=1, uniform="col", minsize=250)
+        rows = (len(mods) + cols - 1) // cols
         for i in range(rows):
-            frame.grid_rowconfigure(i, weight=1, uniform="row")
+            grid.grid_rowconfigure(i, uniform="row")
 
-        for idx, mod in enumerate(selecionados):
-            r = idx // cols
-            c = idx % cols
-            titulo, descricao, cor_borda, nome_comando, icone_path, icone_emoji, _ = mod
-            comando = getattr(self, nome_comando)
-            path = self.resource_path(icone_path) if icone_path else None
-            self._criar_card_modulo(frame, r, c, titulo, descricao, cor_borda, comando, path, icone_emoji)
+        for idx, mod in enumerate(mods):
+            self._criar_card(grid, idx // cols, idx % cols, mod)
 
-        return frame
+        # atualiza a região rolável e volta ao topo
+        self.card_container.update_idletasks()
+        self.cards_canvas.configure(scrollregion=self.cards_canvas.bbox("all"))
+        self.cards_canvas.yview_moveto(0)
 
     def _aplicar_filtro(self, filtro):
-        for cat, frame in self.card_frames.items():
-            if cat == filtro:
-                frame.pack(fill=tk.BOTH, expand=True)
-            else:
-                frame.pack_forget()
-        for cat, btn in self.filtro_botoes.items():
-            if cat == filtro:
-                btn.config(bg="#003399", fg="white", font=("Segoe UI", 10, "bold"))
-            else:
-                btn.config(bg="#E0E0E0", fg="#1A1A1A", font=("Segoe UI", 10))
+        self.categoria_atual = filtro
+        self._restyle_nav()
+        self._render_cards()
 
-    def _criar_card_modulo(self, parent, row, col, titulo, descricao, cor_borda, comando, icone_path=None, icone_emoji="📦"):
-        container = tk.Frame(parent, bg="#F0F0F0")
-        container.grid(row=row, column=col, sticky="nsew", padx=8, pady=8)
-        
-        card = tk.Frame(container, bg="#FFFFFF", highlightbackground=cor_borda, highlightthickness=2, cursor="hand2")
-        card.pack(fill=tk.BOTH, expand=True, ipadx=10, ipady=10)
-        card.bind("<Button-1>", lambda e: comando())
-        
-        elementos_hover = [card]
+    def _criar_card(self, parent, row, col, mod):
+        titulo, descricao, cor, nome_comando, _icone_path, emoji, _cat = mod
+        comando = getattr(self, nome_comando)
+        CARD = tema.CARD
+        HOVER = "#F7F8FF"
 
-        # Container interno para dividir Ícone (Esquerda) e Textos (Direita)
-        inner_frame = tk.Frame(card, bg="#FFFFFF", cursor="hand2")
-        inner_frame.pack(fill=tk.BOTH, expand=True)
-        inner_frame.bind("<Button-1>", lambda e: comando())
-        elementos_hover.append(inner_frame)
-        
-        if icone_path and os.path.exists(icone_path):
-            try:
-                img = Image.open(icone_path)
-                img.thumbnail((64, 64)) # Ajuste o tamanho do ícone aqui
-                img_tk = ImageTk.PhotoImage(img)
-                lbl_icon = tk.Label(inner_frame, image=img_tk, bg="#FFFFFF", cursor="hand2")
-                lbl_icon.image = img_tk # Mantém a referência da imagem na memória
-                lbl_icon.pack(side=tk.LEFT, padx=(0, 15), anchor=tk.N)
-                lbl_icon.bind("<Button-1>", lambda e: comando())
-                elementos_hover.append(lbl_icon)
-            except Exception as e:
-                print("Erro ao carregar ícone do card:", e)
-                lbl_icon = tk.Label(inner_frame, text=icone_emoji, font=("Segoe UI", 40), bg="#FFFFFF", fg=cor_borda, cursor="hand2")
-                lbl_icon.pack(side=tk.LEFT, padx=(0, 15), anchor=tk.N)
-                lbl_icon.bind("<Button-1>", lambda e: comando())
-                elementos_hover.append(lbl_icon)
-        else:
-            lbl_icon = tk.Label(inner_frame, text=icone_emoji, font=("Segoe UI", 40), bg="#FFFFFF", fg=cor_borda, cursor="hand2")
-            lbl_icon.pack(side=tk.LEFT, padx=(0, 15), anchor=tk.N)
-            lbl_icon.bind("<Button-1>", lambda e: comando())
-            elementos_hover.append(lbl_icon)
-                
-        text_frame = tk.Frame(inner_frame, bg="#FFFFFF", cursor="hand2")
-        text_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        text_frame.bind("<Button-1>", lambda e: comando())
-        elementos_hover.append(text_frame)
-        
-        lbl_titulo = tk.Label(text_frame, text=titulo, font=("Segoe UI", 12, "bold"), bg="#FFFFFF", fg="#1A1A1A", cursor="hand2")
-        lbl_titulo.pack(anchor=tk.W, pady=(0, 5))
-        lbl_titulo.bind("<Button-1>", lambda e: comando())
-        elementos_hover.append(lbl_titulo)
-        
-        lbl_desc = tk.Label(text_frame, text=descricao, font=("Segoe UI", 9), bg="#FFFFFF", fg="#1A1A1A", justify=tk.LEFT, cursor="hand2", wraplength=240)
-        lbl_desc.pack(fill=tk.X, anchor=tk.W)
-        lbl_desc.bind("<Button-1>", lambda e: comando())
-        elementos_hover.append(lbl_desc)
-        
-        btn = tk.Label(text_frame, text="ACESSAR MÓDULO ➔", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", fg=cor_borda, cursor="hand2")
-        btn.pack(anchor=tk.W, pady=(15, 0))
-        btn.bind("<Button-1>", lambda e: comando())
-        elementos_hover.append(btn)
+        # descrição enxuta (~2 linhas) para manter os cards baixos e evitar rolagem
+        desc_curta = descricao if len(descricao) <= 110 else descricao[:107].rstrip() + "…"
 
-        # --- CONFIGURAÇÃO DO EFEITO HOVER ---
-        cor_normal = "#FFFFFF"
-        cor_hover = "#F5F5F5"
+        cell = tk.Frame(parent, bg=tema.BG_BASE)
+        cell.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+
+        card = tk.Frame(cell, bg=CARD, highlightbackground=tema.BORDER, highlightthickness=1, cursor="hand2")
+        card.pack(fill=tk.BOTH, expand=True)
+
+        accent = tk.Frame(card, bg=cor, width=5)
+        accent.pack(side=tk.LEFT, fill=tk.Y)
+
+        body = tk.Frame(card, bg=CARD, cursor="hand2")
+        body.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=12, pady=9)
+
+        topo = tk.Frame(body, bg=CARD)
+        topo.pack(fill=tk.X)
+        lbl_ic = tk.Label(topo, text=emoji, font=("Segoe UI", 16), bg=CARD, fg=cor)
+        lbl_ic.pack(side=tk.LEFT)
+        lbl_titulo = tk.Label(topo, text=titulo, font=("Segoe UI", 10, "bold"), bg=CARD,
+                              fg=tema.TEXT, anchor="w", justify=tk.LEFT, wraplength=210)
+        lbl_titulo.pack(side=tk.LEFT, padx=(9, 0), fill=tk.X, expand=True)
+
+        lbl_desc = tk.Label(body, text=desc_curta, font=("Segoe UI", 9), bg=CARD,
+                            fg=tema.TEXT_SECOND, justify=tk.LEFT, anchor="w", wraplength=250)
+        lbl_desc.pack(fill=tk.X, anchor=tk.W, pady=(6, 0))
+
+        lbl_abrir = tk.Label(body, text="Abrir  →", font=("Segoe UI", 9, "bold"), bg=CARD, fg=cor)
+        lbl_abrir.pack(anchor=tk.W, pady=(7, 0))
+
+        internos = [body, topo, lbl_ic, lbl_titulo, lbl_desc, lbl_abrir]
+        for el in [card] + internos:
+            el.bind("<Button-1>", lambda e: comando())
 
         def on_enter(e):
-            for el in elementos_hover:
-                el.configure(bg=cor_hover)
+            card.config(highlightbackground=cor)
+            for el in internos:
+                el.config(bg=HOVER)
 
         def on_leave(e):
-            for el in elementos_hover:
-                el.configure(bg=cor_normal)
+            card.config(highlightbackground=tema.BORDER)
+            for el in internos:
+                el.config(bg=CARD)
 
-        # Aplica os eventos a todos os pedacinhos do cartão
-        for el in elementos_hover:
+        for el in [card] + internos:
             el.bind("<Enter>", on_enter)
             el.bind("<Leave>", on_leave)
             
@@ -633,6 +792,34 @@ class TelaInicial(tk.Frame):
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaImportacaoPlanilhaTributacao(self.parent, callback_voltar=self._voltar_inicial)
 
+    def _abrir_importacao_planilha_estoque_producao(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Estoque de Produção via Planilha - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Estoque de Produção via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaEstoqueProducao(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_nfe(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Notas Fiscais (XML) - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Notas Fiscais (XML)"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoNFe(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_duplicar_empresa(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Duplicar / Configurar Empresa - Implantação Sistec")
+        self.nome_tela_atual = "Duplicar / Configurar Empresa"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaDuplicarEmpresa(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_vinculo_cc(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Vínculo CC × Plano de Contas - Implantação Sistec")
+        self.nome_tela_atual = "Vínculo CC × Plano de Contas"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaVinculoCC(self.parent, callback_voltar=self._voltar_inicial)
+
     def _abrir_auditoria_produto(self):
         self.pack_forget()
         self.winfo_toplevel().title("Auditoria por Produto - Implantação Sistec")
@@ -656,4 +843,7 @@ class TelaInicial(tk.Frame):
         self.tela_atual = None # Limpa a referência para o Garbage Collector destruir a tela fechada
         self.winfo_toplevel().title("Implantação Sistec")
         self.pack(fill=tk.BOTH, expand=True) # Mostra a tela inicial de volta
+        # Reassume a rolagem da roda do mouse (um módulo pode ter capturado o bind global)
+        if hasattr(self, 'cards_canvas'):
+            self.cards_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 

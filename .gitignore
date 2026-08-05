@@ -32,3 +32,10 @@ Thumbs.db
 
 # Zip
 *.zip
+
+# Token do GitHub para o publicar.py (NUNCA comitar)
+.github_token
+
+# Caches de analise (regerados a cada execucao)
+*.pkl
+conversa_claude

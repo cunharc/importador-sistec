@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import configparser
+from utils import tema
+from utils import tipo_cadastro
 import utils.xml_reader as xml_reader
 import utils.firebird_conn as fb
 import re
@@ -76,6 +78,7 @@ class DialogoVincularCondPagto(tk.Toplevel):
 
         self._criar_widgets()
         self._popular_listas()
+        tema.centralizar(self, w, h)
 
     def _criar_widgets(self):
         main_frame = ttk.Frame(self, padding=10)
@@ -212,6 +215,7 @@ class DialogoConciliacao(tk.Toplevel):
 
         self._criar_widgets()
         self._popular()
+        tema.centralizar(self, w, h)
 
     def _criar_widgets(self):
         topo = ttk.Frame(self)
@@ -368,13 +372,42 @@ class TelaNFe(ttk.Frame):
 
     def _criar_widgets(self):
         # === HEADER ===
-        header = tk.Frame(self, bg="#003399", padx=15, pady=8)
-        header.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(header, text="IMPORTAÇÃO DE CLIENTES / FORNECEDORES VIA XML NF-e",
-                 font=("Segoe UI", 14, "bold"), bg="#003399", fg="white").pack(anchor=tk.W)
+        tema.montar_header(
+            self, "Clientes/Fornecedores NF-e",
+            "Importação automática de clientes e fornecedores via leitura de XML de NF-e 4.00"
+        ).pack(fill=tk.X)
+
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   LER XMLs", self._adicionar_xmls)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_limpar = tema.botao_sidebar(sidebar, "🗑   Limpar", self._limpar_lista)
+        self.btn_limpar.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Importar Selecionados", self._importar_selecionados, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
 
         # === PARAMETERS BAR ===
-        param_bar = ttk.Frame(self)
+        param_bar = ttk.Frame(content)
         param_bar.pack(fill=tk.X, pady=2)
 
         tk.Label(param_bar, text="Empresa:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -386,7 +419,7 @@ class TelaNFe(ttk.Frame):
         self.ent_filial.pack(side=tk.LEFT)
 
         # === FILE SELECTION ===
-        file_row = ttk.Frame(self)
+        file_row = ttk.Frame(content)
         file_row.pack(fill=tk.X, pady=4)
 
         tk.Label(file_row, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
@@ -399,27 +432,18 @@ class TelaNFe(ttk.Frame):
         self.btn_add_xml = ttk.Button(file_row, text="📄 Arquivos", command=self._selecionar_arquivos)
         self.btn_add_xml.pack(side=tk.LEFT, padx=2)
 
-        self.btn_analisar = tk.Button(file_row, text="🔍 LER XMLs",
-                                       font=("Segoe UI", 9, "bold"), bg="#003399", fg="white",
-                                       cursor="hand2", padx=12, pady=1,
-                                       command=self._adicionar_xmls)
-        self.btn_analisar.pack(side=tk.LEFT, padx=5)
-
-        self.btn_limpar = ttk.Button(file_row, text="🗑 Limpar", command=self._limpar_lista)
-        self.btn_limpar.pack(side=tk.LEFT, padx=2)
-
         # === PROGRESS + TOTAL ===
-        info_row = ttk.Frame(self)
+        info_row = ttk.Frame(content)
         info_row.pack(fill=tk.X, pady=2)
 
         self.progresso = ttk.Progressbar(info_row, orient=tk.HORIZONTAL, mode='determinate')
         self.progresso.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
 
-        self.lbl_total = ttk.Label(info_row, text="Total: 0 arquivo(s)", font=("Segoe UI", 10, "bold"), foreground="#003399")
+        self.lbl_total = ttk.Label(info_row, text="Total: 0 arquivo(s)", font=("Segoe UI", 10, "bold"), foreground="#14146E")
         self.lbl_total.pack(side=tk.RIGHT, padx=5)
 
         # === FILTERS BAR ===
-        filter_bar = ttk.Frame(self)
+        filter_bar = ttk.Frame(content)
         filter_bar.pack(fill=tk.X, pady=4)
 
         tk.Label(filter_bar, text="Filtros:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 5))
@@ -429,12 +453,14 @@ class TelaNFe(ttk.Frame):
         ttk.Button(filter_bar, text="✕ Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=10)
 
         # === TREEVIEW ===
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
 
-        larguras = [80, 80, 60, 140, 250, 80, 120, 80, 160]
+        # TIPO precisa caber "Cliente e Fornecedor" — a coluna é clicável e alterna entre
+        # os quatro tipos, então o texto não pode ficar cortado.
+        larguras = [80, 80, 150, 140, 250, 80, 120, 80, 160]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
             self.tree.column(col, width=larg, anchor=tk.CENTER if col != "RAZÃO SOCIAL" else tk.W)
@@ -450,18 +476,26 @@ class TelaNFe(ttk.Frame):
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
         # === ACTIONS BAR ===
-        actions_row = ttk.Frame(self)
+        actions_row = ttk.Frame(content)
         actions_row.pack(fill=tk.X, pady=4)
 
         ttk.Button(actions_row, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
+        btn_rem_consumidor = ttk.Button(actions_row, text="🧹 Remover Consumidor", command=self._remover_consumidor)
+        btn_rem_consumidor.pack(side=tk.LEFT, padx=3)
+        ToolTip(btn_rem_consumidor, "Remove da lista os registros cuja Razão Social seja\n'CONSUMIDOR', 'CONSUMIDOR FINAL', etc. (comum em NFC-e).")
         ttk.Button(actions_row, text="📊 Conciliação", command=self._abrir_conciliacao).pack(side=tk.LEFT, padx=3)
 
-        self.btn_importar = tk.Button(actions_row, text="🚀 Importar Selecionados", state=tk.DISABLED,
-                                       font=("Segoe UI", 9, "bold"), bg="#003399", fg="white",
-                                       cursor="hand2", padx=14, pady=1,
-                                       command=self._importar_selecionados)
-        self.btn_importar.pack(side=tk.LEFT, padx=8)
+        ttk.Separator(actions_row, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=5, fill=tk.Y)
+        tk.Label(actions_row, text="Tipo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(2, 2))
+        self.cb_tipo_lote = ttk.Combobox(actions_row, values=tipo_cadastro.TIPOS,
+                                         state="readonly", width=20, font=("Segoe UI", 9))
+        self.cb_tipo_lote.set(tipo_cadastro.CLIENTE)
+        self.cb_tipo_lote.pack(side=tk.LEFT, padx=2)
+        btn_tipo = ttk.Button(actions_row, text="Aplicar aos ☑", command=self._aplicar_tipo_marcados)
+        btn_tipo.pack(side=tk.LEFT, padx=3)
+        ToolTip(btn_tipo, "Define cliente / fornecedor / os dois / outros nos registros marcados.\n"
+                          "Também dá para clicar direto na coluna TIPO de uma linha para alternar.")
 
         self.var_auto_criar_cond_pagto = tk.BooleanVar(self, value=True)
         chk_auto = ttk.Checkbutton(actions_row, text="Criar Cond. Pgto. Automaticamente",
@@ -471,37 +505,69 @@ class TelaNFe(ttk.Frame):
         ToolTip(chk_auto, "Se marcado: Cria condições de pagamento inexistentes automaticamente no banco.\nSe desmarcado: Abre janela para vincular as condições do XML com as já existentes.")
 
         # === LOG ===
-        log_frame = ttk.LabelFrame(self, text="Log de Importação", padding="5")
+        log_frame = ttk.LabelFrame(content, text="Log de Importação", padding="5")
         log_frame.pack(fill=tk.X, pady=(4, 0))
         self.txt_log = tk.Text(log_frame, height=5, state=tk.DISABLED, bg="#F9F9F9", font=("Segoe UI", 9))
         self.txt_log.pack(fill=tk.X)
-
-        # === FOOTER ===
-        footer = tk.Frame(self, bg="#f0f0f0", padx=10, pady=6)
-        footer.pack(fill=tk.X, pady=(4, 0))
-
-        tk.Button(footer, text="⬅ VOLTAR", command=self._fechar_tela,
-                  font=("Segoe UI", 9, "bold"), bg="#95a5a6", fg="white",
-                  cursor="hand2", padx=12, pady=2).pack(side=tk.LEFT)
 
     def _toggle_checkbox(self, event):
         """Inverte o valor do checkbox se o usuário clicar na primeira coluna."""
         region = self.tree.identify_region(event.x, event.y)
         if region == "cell":
             column = self.tree.identify_column(event.x)
+            item = self.tree.identify_row(event.y)
+            if not item: return
+
             if column == "#1": # Coluna 'SELECIONAR'
-                item = self.tree.identify_row(event.y)
-                if not item: return
                 valores = list(self.tree.item(item, "values"))
                 novo_valor = "☑" if valores[0] == "☐" else "☐"
                 valores[0] = novo_valor
                 self.tree.item(item, values=valores)
-                
+
                 reg_completo = self.dados_nfe_lidos.get(item)
                 for r in self.dados_completos:
                     if r['reg_completo'] == reg_completo:
                         r['valores'][0] = novo_valor
                         break
+
+            elif column == "#3": # Coluna 'TIPO'
+                valores = list(self.tree.item(item, "values"))
+                self._definir_tipo(item, tipo_cadastro.proximo(valores[2]))
+
+    def _definir_tipo(self, item, novo_tipo):
+        """Grava o tipo do cadastro na linha, no registro e na lista completa.
+
+        O tipo tem de viver no `reg_completo`: é ele que a importação lê, e é dele
+        que `_renderizar_tabela` reconstrói a grade depois de um filtro — só na
+        célula, a escolha se perderia no próximo filtro.
+        """
+        valores = list(self.tree.item(item, "values"))
+        valores[2] = novo_tipo
+        self.tree.item(item, values=valores)
+
+        reg_completo = self.dados_nfe_lidos.get(item)
+        if reg_completo is not None:
+            reg_completo['tipo'] = novo_tipo
+        for r in self.dados_completos:
+            if r['reg_completo'] == reg_completo:
+                r['valores'][2] = novo_tipo
+                break
+
+    def _aplicar_tipo_marcados(self):
+        """Aplica o tipo escolhido no combo às linhas marcadas com ☑ e ainda NOVAS."""
+        novo_tipo = self.cb_tipo_lote.get()
+        alterados = 0
+        for item in self.tree.get_children():
+            valores = list(self.tree.item(item, "values"))
+            if valores[0] == "☑" and "NOVO" in valores[-1]:
+                self._definir_tipo(item, novo_tipo)
+                alterados += 1
+        if alterados == 0:
+            messagebox.showinfo("Nada a alterar",
+                                "Nenhum registro NOVO está marcado com ☑.\n"
+                                "O tipo só vale para quem ainda vai ser cadastrado.")
+        else:
+            self.lbl_total.config(text=f"{alterados} registro(s) → {novo_tipo}")
 
     def _marcar_novos(self):
         """Marca todos os que estão com status NOVO."""
@@ -520,6 +586,31 @@ class TelaNFe(ttk.Frame):
         for r in self.dados_completos:
             r['valores'][0] = "☐"
         self._renderizar_tabela()
+
+    def _remover_consumidor(self):
+        """Remove da lista os registros genéricos de 'CONSUMIDOR' (comum em NFC-e)."""
+        if not self.dados_completos:
+            return messagebox.showwarning("Aviso", "Leia os XMLs primeiro.")
+
+        # Casa 'CONSUMIDOR', 'CONSUMIDOR FINAL', 'CONSUMIDOR NAO IDENTIFICADO', etc.
+        padrao = re.compile(r'\bCONSUMIDOR(ES)?\b', re.IGNORECASE)
+        antes = len(self.dados_completos)
+        self.dados_completos = [
+            r for r in self.dados_completos
+            if not padrao.search(str(r['valores'][4]))  # índice 4 = RAZÃO SOCIAL
+        ]
+        removidos = antes - len(self.dados_completos)
+
+        self._renderizar_tabela()
+
+        if not any(r['tag'] == 'NOVO' for r in self.dados_completos):
+            self.btn_importar.config(state=tk.DISABLED)
+
+        messagebox.showinfo(
+            "Remover Consumidor",
+            f"{removidos} registro(s) de 'CONSUMIDOR' removido(s) da lista." if removidos
+            else "Nenhum registro de 'CONSUMIDOR' encontrado na lista."
+        )
 
     def _limpar_filtros(self):
         for k in self.filtros_ativos:
@@ -565,9 +656,9 @@ class TelaNFe(ttk.Frame):
         top.title(f"Filtrar por {coluna}")
         w = min(400, int(self.winfo_screenwidth() * 0.4))
         h = min(500, int(self.winfo_screenheight() * 0.6))
-        top.geometry(f"{w}x{h}")
         top.minsize(300, 300)
         top.transient(self.winfo_toplevel())
+        tema.centralizar(top, w, h)
         top.grab_set()
 
         frame_search = ttk.Frame(top)

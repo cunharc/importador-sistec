@@ -53,10 +53,10 @@ class TelaProduto(ttk.Frame):
 
     def _criar_widgets(self):
         # === HEADER ===
-        header = tk.Frame(self, bg="#16A085", padx=15, pady=8)
+        header = tk.Frame(self, bg="#14146E", padx=15, pady=8)
         header.pack(fill=tk.X, pady=(0, 10))
         tk.Label(header, text="CADASTRO E TRIBUTAÇÃO DE PRODUTOS (XML vs ERP)",
-                 font=("Segoe UI", 14, "bold"), bg="#16A085", fg="white").pack(anchor=tk.W)
+                 font=("Segoe UI", 14, "bold"), bg="#14146E", fg="white").pack(anchor=tk.W)
 
         # === FILE SELECTION ===
         frame_dir = ttk.Frame(self)
@@ -70,7 +70,7 @@ class TelaProduto(ttk.Frame):
         btn_arq = ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos)
         btn_arq.pack(side=tk.LEFT, padx=2)
         self.btn_analisar = tk.Button(frame_dir, text="🔍 Analisar Match",
-                                       font=("Segoe UI", 9, "bold"), bg="#2980b9", fg="white",
+                                       font=("Segoe UI", 9, "bold"), bg="#14146E", fg="white",
                                        cursor="hand2", padx=10, pady=1,
                                        command=self._iniciar_analise)
         self.btn_analisar.pack(side=tk.LEFT, padx=5)
@@ -158,7 +158,7 @@ class TelaProduto(ttk.Frame):
         self.btn_tributar.pack(side=tk.RIGHT, padx=3)
 
         self.btn_cadastrar = tk.Button(footer, text="➕ Apenas Cadastrar",
-                                        font=("Segoe UI", 9, "bold"), bg="#2980B9", fg="white",
+                                        font=("Segoe UI", 9, "bold"), bg="#14146E", fg="white",
                                         cursor="hand2", state=tk.DISABLED, padx=14, pady=2,
                                         command=lambda: self._injetar_firebird(modo=1))
         self.btn_cadastrar.pack(side=tk.RIGHT, padx=3)

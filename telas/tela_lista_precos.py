@@ -7,6 +7,7 @@ import datetime
 import logging
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
+from utils import tema
 
 
 class DropdownListbox(tk.Frame):
@@ -46,10 +47,9 @@ class DropdownListbox(tk.Frame):
         for item in self._items:
             idx = self.listbox.size()
             self.listbox.insert(tk.END, item)
+            # Listbox não suporta fonte por item; destaca os "bold" pela cor do texto.
             if item in self._bold_set:
-                self.listbox.itemconfig(idx, font=("Segoe UI", 9, "bold"))
-            else:
-                self.listbox.itemconfig(idx, font=("Segoe UI", 9))
+                self.listbox.itemconfig(idx, foreground="#0B4DA2")
 
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height()
@@ -117,11 +117,40 @@ class TelaListaPrecos(ttk.Frame):
         self.after(500, self._carregar_listas_existentes)
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="GERAÇÃO DE LISTA DE PREÇOS DE VENDA (VIA XML)", font=("Segoe UI", 14, "bold"), fg="#E67E22")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Lista de Preços XML",
+            "Crie ou atualize listas de preços capturando o valor unitário dos XMLs"
+        ).pack(fill=tk.X)
+
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Extrair Preços do XML", self._iniciar_analise)
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_salvar = tema.botao_sidebar(sidebar, "💾   Injetar Preços no ERP", self._salvar_banco, cor_fg="#7EE0A0")
+        self.btn_salvar.config(state=tk.DISABLED)
+        self.btn_salvar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
 
         # Frame de Configuração da Lista
-        frame_lista = ttk.LabelFrame(self, text="Configuração da Lista de Preços", padding="10")
+        frame_lista = ttk.LabelFrame(content, text="Configuração da Lista de Preços", padding="10")
         frame_lista.pack(fill=tk.X, pady=5)
 
         self.var_modo = tk.StringVar(self, value="EXISTENTE")
@@ -146,29 +175,26 @@ class TelaListaPrecos(ttk.Frame):
         self.ent_desc_lista.grid(row=1, column=4, sticky=tk.W, padx=5)
 
         # Seleção de Arquivos
-        frame_dir = ttk.Frame(self)
+        frame_dir = ttk.Frame(content)
         frame_dir.pack(fill=tk.X, pady=10)
-        
+
         self.ent_pasta = ttk.Entry(frame_dir, width=60)
         self.ent_pasta.pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Extrair Preços do XML", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.RIGHT, padx=5)
 
-        self.lbl_status = ttk.Label(self, text="Aguardando arquivos...", font=("Segoe UI", 9))
+        self.lbl_status = ttk.Label(content, text="Aguardando arquivos...", font=("Segoe UI", 9))
         self.lbl_status.pack(anchor=tk.W)
 
         # Controles da Grade
-        frame_meio = ttk.Frame(self)
+        frame_meio = ttk.Frame(content)
         frame_meio.pack(fill=tk.X, pady=5)
         ttk.Button(frame_meio, text="☑ Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_meio, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=5)
-        ttk.Label(frame_meio, text="💡 DICA: Dê um duplo clique na linha do produto para editar o Preço manualmente.", foreground="#003399", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=15)
+        ttk.Label(frame_meio, text="💡 DICA: Dê um duplo clique na linha do produto para editar o Preço manualmente.", foreground="#14146E", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=15)
 
         # Grade (Treeview)
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
@@ -189,14 +215,6 @@ class TelaListaPrecos(ttk.Frame):
         self.tree.configure(yscroll=scroll_y.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Rodapé
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        self.btn_salvar = tk.Button(frame_fim, text="💾 INJETAR PREÇOS NO ERP", font=("Segoe UI", 9, "bold"), bg="#27AE60", fg="white", cursor="hand2", state=tk.DISABLED, command=self._salvar_banco)
-        self.btn_salvar.pack(side=tk.RIGHT, padx=5)
 
     def _toggle_modo(self):
         if self.var_modo.get() == "NOVA":
@@ -410,10 +428,19 @@ class TelaListaPrecos(ttk.Frame):
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
 
     def _renderizar_resultados(self):
+        # Selo deste render. A grade e preenchida em blocos com after(), entao um
+        # render antigo pode continuar inserindo DEPOIS que outro limpou a tela —
+        # a grade acumula duas analises e os totais somam tudo. O selo faz os
+        # blocos do render antigo pararem.
+        self._render_seq = getattr(self, '_render_seq', 0) + 1
+        meu_seq = self._render_seq
+
         chunk_size = 200
         total = len(self.dados_analisados)
         
         def render_chunk(start_idx):
+            if meu_seq != self._render_seq:
+                return  # um render mais novo assumiu a grade
             end_idx = min(start_idx + chunk_size, total)
             for i in range(start_idx, end_idx):
                 item = self.dados_analisados[i]

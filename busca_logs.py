@@ -8,6 +8,7 @@ import datetime
 import json
 import sys
 from pathlib import Path
+from utils import tema
 
 MODULOS_FIXOS = [
     "Abate - Pesagem", "Arvore de Privilegios", "Baixa Etiqueta",
@@ -354,10 +355,11 @@ def parse_bloco(bloco_texto: str, filename: str = "") -> dict:
 
     return dados
 
-def parse_log_file(filepath: str, termo: str, case_insensitive: bool) -> list:
-    """Abre um arquivo, lê o bloco e tenta encontrar correspondências do termo passado."""
+def parse_log_file(filepath: str, termo: str, case_insensitive: bool, modulos_filtro: list = None) -> list:
+    """Abre o arquivo UMA única vez, processa bloco a bloco e fecha, guardando apenas
+    o resumo parseado de cada ocorrência (sem o texto cru, que pesa muito na memória)."""
     blocos_encontrados = []
-    
+
     try:
         # Logs do ERP Sistec têm encoding Latin-1. Errors replace previne falhas com lixo.
         with open(filepath, 'r', encoding='latin-1', errors='replace') as f:
@@ -368,61 +370,67 @@ def parse_log_file(filepath: str, termo: str, case_insensitive: bool) -> list:
 
     # Quebra o arquivo em blocos separados pelas linhas '=' (80 ou mais caracteres de = geralmente)
     blocos_raw = re.split(r'=+', conteudo)
+    del conteudo  # libera o texto completo do arquivo o quanto antes
     termo_busca = termo.lower() if case_insensitive else termo
+    fpstr = str(filepath)
 
     for bloco_raw in blocos_raw:
         if not bloco_raw.strip():
             continue
-            
-        texto_busca = bloco_raw.lower() if case_insensitive else bloco_raw
-        if termo_busca in texto_busca:
-            dados = parse_bloco(bloco_raw, str(filepath))
-            if dados:
-                dados['bloco_raw'] = bloco_raw
-                
-                # Mapeia onde o termo foi encontrado para facilitar o Highlight na Interface
-                for c, v1, v2 in dados['campos_alterados']:
-                    v_str = f"{c} {v1} {v2}"
-                    if termo_busca in (v_str.lower() if case_insensitive else v_str):
-                        dados['termo_encontrado_em'].append(c)
-                        
-                for c, v in dados['campos_inseridos']:
-                    v_str = f"{c} {v}"
-                    if termo_busca in (v_str.lower() if case_insensitive else v_str):
-                        dados['termo_encontrado_em'].append(c)
-                
-                if not dados['termo_encontrado_em']:
-                    dados['termo_encontrado_em'].append("Corpo do Bloco / Cabeçalho")
 
-                blocos_encontrados.append(dados)
-                
+        texto_busca = bloco_raw.lower() if case_insensitive else bloco_raw
+        if termo_busca not in texto_busca:
+            continue
+
+        dados = parse_bloco(bloco_raw, fpstr)
+        if not dados:
+            continue
+
+        # Filtro de módulo aplicado já aqui (evita reler o arquivo numa segunda passada)
+        if modulos_filtro and dados.get('tela', '').strip() not in modulos_filtro:
+            continue
+
+        # Mapeia onde o termo foi encontrado para facilitar o Highlight na Interface
+        for c, v1, v2 in dados['campos_alterados']:
+            v_str = f"{c} {v1} {v2}"
+            if termo_busca in (v_str.lower() if case_insensitive else v_str):
+                dados['termo_encontrado_em'].append(c)
+
+        for c, v in dados['campos_inseridos']:
+            v_str = f"{c} {v}"
+            if termo_busca in (v_str.lower() if case_insensitive else v_str):
+                dados['termo_encontrado_em'].append(c)
+
+        if not dados['termo_encontrado_em']:
+            dados['termo_encontrado_em'].append("Corpo do Bloco / Cabeçalho")
+
+        # Descarta o texto cru: não é usado na interface e é o que estoura a memória
+        dados.pop('bloco_raw', None)
+        blocos_encontrados.append(dados)
+
     return blocos_encontrados
 
 def buscar_em_pasta(pasta: str, termo: str, subpastas: bool, case_insensitive: bool, q: queue.Queue, modulos_filtro: list = None):
-    """Função background que faz o crawling nas pastas sem travar a interface."""
+    """Função background que faz o crawling nas pastas sem travar a interface.
+    Lê cada arquivo uma única vez e guarda só o resumo; tem trava de segurança
+    para termos que retornam ocorrências demais (evita consumir toda a memória)."""
     resultados = {}
     total_arquivos = 0
-    
+    MAX_OCORRENCIAS = 30000   # trava contra termos que casam em praticamente tudo
+    total_ocorrencias = 0
+    truncado = False
+
     try:
         p = Path(pasta)
         pattern = "**/*.*" if subpastas else "*.*"
         exts = {'.txt', '.log'}
         arquivos = [f for f in p.glob(pattern) if f.suffix.lower() in exts]
         total_arquivos = len(arquivos)
-        
+
         for i, filepath in enumerate(arquivos):
-            # Pré-filtro: pula arquivos que não contenham o módulo selecionado
-            if modulos_filtro:
-                try:
-                    texto = filepath.read_text(encoding='utf-8', errors='ignore')
-                except Exception:
-                    continue
-                if not any(m in texto for m in modulos_filtro):
-                    blocos = None
-                else:
-                    blocos = parse_log_file(str(filepath), termo, case_insensitive)
-            else:
-                blocos = parse_log_file(str(filepath), termo, case_insensitive)
+            # Abre, lê, captura o resumo e fecha — uma passada só (o filtro de módulo
+            # é aplicado dentro do parser, sem reler o arquivo).
+            blocos = parse_log_file(str(filepath), termo, case_insensitive, modulos_filtro)
             if blocos:
                 mtime = os.path.getmtime(filepath)
                 data_arquivo = datetime.datetime.fromtimestamp(mtime).strftime('%d/%m/%Y %H:%M')
@@ -432,15 +440,22 @@ def buscar_em_pasta(pasta: str, termo: str, subpastas: bool, case_insensitive: b
                     'blocos': blocos,
                     'filepath': str(filepath)
                 }
-            
+                total_ocorrencias += len(blocos)
+
             # Evita sobrecarga da interface enfileirando progresso a cada 10 arquivos
             if i % 10 == 0 or i == total_arquivos - 1:
                 q.put({'tipo': 'progresso', 'atual': i + 1, 'total': total_arquivos})
-                
+
+            # Trava de segurança: para de acumular se passar do limite
+            if total_ocorrencias >= MAX_OCORRENCIAS:
+                truncado = True
+                q.put({'tipo': 'progresso', 'atual': total_arquivos, 'total': total_arquivos})
+                break
+
     except Exception as e:
         q.put({'tipo': 'erro', 'msg': str(e)})
 
-    q.put({'tipo': 'fim', 'resultados': resultados})
+    q.put({'tipo': 'fim', 'resultados': resultados, 'truncado': truncado})
 
 def exportar_resultados(resultados, filepath):
     """Exporta o resultado do parser resumido para um TXT legível."""
@@ -522,6 +537,7 @@ class BuscaLogsWindow(tk.Toplevel):
         self.lift()
         self.focus_force()
         self.grab_set() # Bloqueia a janela de trás
+        tema.centralizar(self, 900, 700)
         self.after(200, lambda: self.attributes('-topmost', False))
 
     def _criar_widgets(self):
@@ -658,11 +674,11 @@ class BuscaLogsWindow(tk.Toplevel):
         self.txt_detalhes.tag_configure("header", foreground="#2C3E50", font=("Consolas", 10, "bold"))
         self.txt_detalhes.tag_configure("info", foreground="#555555")
         self.txt_detalhes.tag_configure("campo", foreground="#34495E", font=("Consolas", 10, "bold"))
-        self.txt_detalhes.tag_configure("val_antigo", foreground="#C0392B") 
-        self.txt_detalhes.tag_configure("val_novo", foreground="#27AE60", font=("Consolas", 10, "bold")) 
+        self.txt_detalhes.tag_configure("val_antigo", foreground="#C80000") 
+        self.txt_detalhes.tag_configure("val_novo", foreground="#22C55E", font=("Consolas", 10, "bold")) 
         self.txt_detalhes.tag_configure("highlight", background="#F1C40F", foreground="black") 
-        self.txt_detalhes.tag_configure("bg_exclusao", background="#FDEDEC", font=("Consolas", 10, "bold"), foreground="#C0392B")
-        self.txt_detalhes.tag_configure("bg_insercao", background="#EAFAF1", font=("Consolas", 10, "bold"), foreground="#27AE60")
+        self.txt_detalhes.tag_configure("bg_exclusao", background="#FDEDEC", font=("Consolas", 10, "bold"), foreground="#C80000")
+        self.txt_detalhes.tag_configure("bg_insercao", background="#EAFAF1", font=("Consolas", 10, "bold"), foreground="#22C55E")
         self.txt_detalhes.tag_configure("separador", foreground="#BDC3C7")
         self.txt_detalhes.tag_configure("semantico", foreground="#8E44AD", font=("Consolas", 10, "bold"))
 
@@ -755,6 +771,13 @@ class BuscaLogsWindow(tk.Toplevel):
                     self._popular_modulos_filtro(self._resultados_raw)
                     self._aplicar_filtro_modulo()
                     self.progresso['value'] = 0
+                    if msg.get('truncado'):
+                        messagebox.showwarning(
+                            "Busca muito ampla",
+                            "O termo retornou ocorrências demais. Para não sobrecarregar a máquina, "
+                            "a busca foi limitada às primeiras 30.000 ocorrências.\n\n"
+                            "Use um termo mais específico ou filtre por módulo para refinar.",
+                            parent=self)
                     return
         except queue.Empty:
             pass
@@ -1139,8 +1162,8 @@ class BuscaLogsWindow(tk.Toplevel):
             return
         win = tk.Toplevel(self)
         win.title("Selecionar Módulos")
-        win.geometry("450x500")
         win.transient(self)
+        tema.centralizar(win, 450, 500)
         win.grab_set()
 
         ttk.Label(win, text="Selecione os módulos desejados:", font=("", 10, "bold")).pack(anchor=tk.W, padx=10, pady=10)

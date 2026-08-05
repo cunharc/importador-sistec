@@ -2,9 +2,40 @@ from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 import csv
 import os
+import io
+import re
+import zipfile
+
+
+def _carregar_workbook(caminho_arquivo, **kwargs):
+    """Abre o .xlsx com openpyxl. Alguns exportadores (ex.: Bling/Conta Azul)
+    gravam gradientFill com type="line" em vez de "linear"/"path", o que faz
+    o openpyxl rejeitar o stylesheet mesmo sem usarmos estilo algum aqui.
+    Se isso ocorrer, corrige o atributo em memoria e tenta novamente."""
+    try:
+        return load_workbook(caminho_arquivo, **kwargs)
+    except ValueError as e:
+        if 'stylesheet' not in str(e).lower():
+            raise
+        with zipfile.ZipFile(caminho_arquivo, 'r') as zin:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    dados = zin.read(item.filename)
+                    if item.filename == 'xl/styles.xml':
+                        texto = dados.decode('utf-8', errors='replace')
+                        texto = re.sub(
+                            r'(<gradientFill[^>]*\btype=")(?!linear"|path")[^"]*(")',
+                            r'\1linear\2', texto
+                        )
+                        dados = texto.encode('utf-8')
+                    zout.writestr(item, dados)
+            buffer.seek(0)
+            return load_workbook(buffer, **kwargs)
+
 
 def listar_abas(caminho_arquivo: str) -> list:
-    wb = load_workbook(caminho_arquivo, read_only=True, data_only=True)
+    wb = _carregar_workbook(caminho_arquivo, read_only=True, data_only=True)
     abas = wb.sheetnames
     wb.close()
     return abas
@@ -14,7 +45,7 @@ def ler_planilha(caminho_arquivo: str, aba: str, coluna_conta: str,
     """
     Retorna lista de dicts: [{'conta': '1.1.1.01', 'descricao': 'CAIXA'}, ...]
     """
-    wb = load_workbook(caminho_arquivo, read_only=True, data_only=True)
+    wb = _carregar_workbook(caminho_arquivo, read_only=True, data_only=True)
     ws = wb[aba]
     
     col_conta_idx = column_index_from_string(coluna_conta)
@@ -44,7 +75,7 @@ def obter_abas_planilha(caminho_arquivo: str) -> list:
     if str(caminho_arquivo).lower().endswith('.csv'):
         return ['CSV (Aba Única)']
     try:
-        wb = load_workbook(caminho_arquivo, read_only=True, data_only=True)
+        wb = _carregar_workbook(caminho_arquivo, read_only=True, data_only=True)
         abas = wb.sheetnames
         wb.close()
         return abas
@@ -133,7 +164,7 @@ def ler_planilha_produtos(caminho_arquivo: str, aba: str, mapa_colunas: dict, li
                 _split_codigo_descricao(reg, mapa_colunas)
                 if any(reg.values()): registros.append(reg)
     else:
-        wb = load_workbook(caminho_arquivo, read_only=True, data_only=True)
+        wb = _carregar_workbook(caminho_arquivo, read_only=True, data_only=True)
         ws = wb[aba] if aba in wb.sheetnames else wb.active
         for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
             if i < linha_inicial: continue

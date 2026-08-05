@@ -4,19 +4,18 @@ import configparser
 import os
 import sys
 import fdb
+from utils import tema
 
 class TelaConexao(tk.Toplevel):
     def __init__(self, parent, callback_status=None):
         super().__init__(parent)
+        self.parent = parent
         self.callback_status = callback_status
         self.title("Configuração de Conexão — Firebird")
-        w = min(650, int(self.winfo_screenwidth() * 0.6))
-        h = min(400, int(self.winfo_screenheight() * 0.5))
-        self.geometry(f"{w}x{h}")
-        self.minsize(500, 300)
+        self.configure(bg=tema.BG_BASE)
+        self.minsize(560, 420)
         self.transient(parent)
-        self.grab_set()
-        
+
         icon_path = self.resource_path("icon.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
@@ -26,6 +25,29 @@ class TelaConexao(tk.Toplevel):
 
         self._criar_widgets()
         self._carregar_dados()
+        self._centralizar(620, 440)
+        self.grab_set()
+
+    def _centralizar(self, w, h):
+        """Posiciona a janela centralizada sobre a janela principal (ou na tela)."""
+        self.update_idletasks()
+        try:
+            pw = self.parent.winfo_width()
+            ph = self.parent.winfo_height()
+            px = self.parent.winfo_rootx()
+            py = self.parent.winfo_rooty()
+            if pw > 1 and ph > 1:
+                x = px + (pw - w) // 2
+                y = py + (ph - h) // 2
+            else:
+                raise ValueError
+        except Exception:
+            x = (self.winfo_screenwidth() - w) // 2
+            y = (self.winfo_screenheight() - h) // 2
+        # Garante que não fique fora da tela
+        x = max(0, x)
+        y = max(0, y)
+        self.geometry(f"{w}x{h}+{x}+{y}")
 
     def resource_path(self, relative_path):
         if not relative_path or os.path.isabs(relative_path):
@@ -41,7 +63,13 @@ class TelaConexao(tk.Toplevel):
         return relative_path
 
     def _criar_widgets(self):
-        frame = ttk.Frame(self, padding="10")
+        # Cabeçalho navy (identidade Sistecweb)
+        tema.montar_header(
+            self, "Configuração de Conexão",
+            "Parâmetros de acesso ao banco de dados Firebird"
+        ).pack(fill=tk.X)
+
+        frame = ttk.Frame(self, padding="16")
         frame.pack(fill=tk.BOTH, expand=True)
 
         # Servidor e Porta
@@ -90,8 +118,8 @@ class TelaConexao(tk.Toplevel):
         # Botões
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=5, column=0, columnspan=3, pady=20)
-        ttk.Button(btn_frame, text="Testar Conexão", command=self._testar_conexao).pack(side=tk.LEFT, padx=10)
-        ttk.Button(btn_frame, text="Salvar", command=self._salvar_config).pack(side=tk.LEFT, padx=10)
+        tema.estilo_botao(btn_frame, "🔌 Testar Conexão", self._testar_conexao, "primary").pack(side=tk.LEFT, padx=10)
+        tema.estilo_botao(btn_frame, "💾 Salvar", self._salvar_config, "success").pack(side=tk.LEFT, padx=10)
 
     def _carregar_dados(self):
         if self.config.has_section('FIREBIRD'):
@@ -206,16 +234,16 @@ class TelaConexao(tk.Toplevel):
     def _mostrar_erro_detalhado(self, titulo, mensagem):
         err_win = tk.Toplevel(self)
         err_win.title(titulo)
-        err_win.geometry("500x300")
         err_win.transient(self)
         err_win.grab_set()
-        
+
         ttk.Label(err_win, text="Ocorreu um erro (Você pode copiar o texto abaixo):").pack(pady=5, anchor=tk.W, padx=10)
         txt = tk.Text(err_win, wrap=tk.WORD)
         txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         txt.insert(tk.END, mensagem)
         txt.configure(state=tk.DISABLED) # Deixa como leitura, mas permite selecionar e copiar
         ttk.Button(err_win, text="Fechar", command=err_win.destroy).pack(pady=10)
+        tema.centralizar(err_win, 500, 300)
 
     def _testar_conexao(self):
         servidor = self.ent_servidor.get().strip()

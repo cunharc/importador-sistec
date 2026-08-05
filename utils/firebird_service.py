@@ -3,9 +3,42 @@ if not hasattr(locale, 'resetlocale'):
     locale.resetlocale = lambda: locale.setlocale(locale.LC_ALL, "")
 
 import fdb
+import os
+import sys
 import time
 import argparse
 from typing import List, Dict, Any, Callable, Optional
+
+
+def resolver_fbclient(nome):
+    """Transforma 'fbclient_5.dll' num caminho absoluto.
+
+    A partir do Python 3.8 o `ctypes` não procura mais DLL no diretório atual, então
+    um nome relativo só conecta por acidente — quando alguma outra conexão do mesmo
+    processo já carregou a biblioteca. Foi assim que as telas de Receber e Pagar
+    ficaram sem centro de custo: `carregar_opcoes` não conseguia conectar e devolvia
+    listas vazias. Procura ao lado do executável empacotado, na raiz do projeto e no
+    diretório atual, nessa ordem; não achando, devolve o que veio (o fdb tenta pelo
+    PATH e a mensagem de erro fica clara).
+    """
+    if not nome:
+        return nome
+    if os.path.isabs(nome):
+        return nome
+    bases = []
+    meipass = getattr(sys, '_MEIPASS', None)
+    if meipass:
+        bases.append(meipass)
+    if getattr(sys, 'frozen', False):
+        bases.append(os.path.dirname(sys.executable))
+    bases.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bases.append(os.getcwd())
+    for base in bases:
+        caminho = os.path.join(base, nome)
+        if os.path.isfile(caminho):
+            return caminho
+    return nome
+
 
 class FirebirdService:
     """
@@ -19,7 +52,7 @@ class FirebirdService:
         self.user = config.get('user', 'SYSDBA')
         self.password = config.get('password', 'masterkey')
         self.charset = config.get('charset', 'WIN1252')
-        self.fbclient = config.get('fbclient')
+        self.fbclient = resolver_fbclient(config.get('fbclient'))
         self.conn: Optional[fdb.Connection] = None
 
     def connect(self, retries: int = 3, delay_ms: int = 500) -> None:

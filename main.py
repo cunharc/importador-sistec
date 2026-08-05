@@ -10,6 +10,7 @@ from PIL import Image, ImageTk
 from tkinter import ttk
 from telas.tela_inicial import TelaInicial
 from utils.logger import get_logger
+from utils import tema
 from version import VERSAO, DATA_VERSAO
 
 _log = get_logger('main')
@@ -37,7 +38,8 @@ if __name__ == '__main__':
     # --- TELA DE CARREGAMENTO (SPLASH SCREEN) ---
     splash = tk.Toplevel(root)
     splash.overrideredirect(True) # Remove as bordas do Windows
-    
+    splash.configure(bg="white", highlightbackground=tema.SISTEC_BLUE, highlightthickness=3)
+
     splash_width = 400
     splash_height = 200
     screen_width = root.winfo_screenwidth()
@@ -48,18 +50,19 @@ if __name__ == '__main__':
     splash.geometry(f'{splash_width}x{splash_height}+{int(x)}+{int(y)}')
     splash.configure(bg="white")
     
-    logo_path = resource_path("sistec.jpg")
+    logo_path = resource_path("Logo oficial grupos - Sistec.png")
     if os.path.exists(logo_path):
         try:
             img = Image.open(logo_path)
-            img.thumbnail((300, 120))
+            img.thumbnail((150, 150))
             splash_img = ImageTk.PhotoImage(img)
             lbl_img = tk.Label(splash, image=splash_img, bg="white")
             lbl_img.pack(expand=True)
         except Exception as e:
             _log.warning(f"Não foi possível carregar o logo da splash screen: {e}")
             
-    lbl_texto = tk.Label(splash, text="Carregando Implantação Sistec...", font=("Arial", 10), bg="white")
+    lbl_texto = tk.Label(splash, text="Carregando Implantação Sistec...",
+                         font=("Segoe UI", 10, "bold"), bg="white", fg=tema.SISTEC_BLUE)
     lbl_texto.pack(side=tk.BOTTOM, pady=10)
     
     splash.update() # Força a tela a aparecer imediatamente
@@ -77,13 +80,8 @@ if __name__ == '__main__':
     if os.path.exists(icon_path):
         root.iconbitmap(icon_path)
 
-    # --- IDENTIDADE VISUAL GLOBAl (Grades/Treeview) ---
-    style = ttk.Style()
-    if "clam" in style.theme_names():
-        style.theme_use("clam") # Clam permite customizar a cor de fundo facilmente no Windows
-        
-    style.configure("Treeview.Heading", background="#003399", foreground="white", font=('Segoe UI', 10, 'bold'))
-    style.map("Treeview", background=[('selected', '#D0E4FF')], foreground=[('selected', '#1A1A1A')])
+    # --- IDENTIDADE VISUAL GLOBAL (Sistecweb) ---
+    tema.aplicar_tema(root)
 
     container = MainContainer(root)
     app = TelaInicial(container.content)

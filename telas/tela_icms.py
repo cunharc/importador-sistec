@@ -11,6 +11,7 @@ import logging
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
 from utils.importer import FirebirdImporter
+from utils import tema
 
 class DialogoExportarIcms(tk.Toplevel):
     """Modal flutuante para definir as faixas de ICMS a serem cadastradas."""
@@ -23,10 +24,7 @@ class DialogoExportarIcms(tk.Toplevel):
         # Define o tamanho para 95% da largura e 85% da altura da tela (evitando cobrir a barra de tarefas)
         largura = int(self.winfo_screenwidth() * 0.95)
         altura = int(self.winfo_screenheight() * 0.85)
-        x = int((self.winfo_screenwidth() - largura) / 2)
-        y = int((self.winfo_screenheight() - altura) / 2)
-        self.geometry(f"{largura}x{altura}+{x}+{y}")
-            
+
         icon_path = self.resource_path("icon.ico")
         if os.path.exists(icon_path):
             self.iconbitmap(icon_path)
@@ -36,17 +34,19 @@ class DialogoExportarIcms(tk.Toplevel):
         self.callback_sucesso = callback_sucesso
         self.inputs_faixa = {}
         self.inputs_cv = {}
-        
+        self.inputs_perfil = {}   # id -> {'CT':BooleanVar,'NC':BooleanVar,'SN':BooleanVar}
+
         self._criar_widgets()
         self._carregar_config_iniciais()
-        
+        tema.centralizar(self, largura, altura)
+
     def resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
         except Exception:
             base_path = os.path.abspath(".")
         return os.path.join(base_path, relative_path)
-        
+
     def _criar_widgets(self):
         # Painel Divisor (Esquerda: Formulário / Direita: Consulta ERP)
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -70,15 +70,18 @@ class DialogoExportarIcms(tk.Toplevel):
         self.ent_filial = ttk.Entry(frame_top, width=8)
         self.ent_filial.pack(side=tk.LEFT, padx=5)
         
-        # Checkboxes de Tipos CF
-        frame_chk = ttk.LabelFrame(frame_top, text="Gravar regras para quais Tipos de Cliente?", padding="5")
+        # Atalho: aplica o perfil a TODAS as linhas de uma vez (o controle fino é por linha)
+        frame_chk = ttk.LabelFrame(frame_top, text="Aplicar perfil a TODAS as linhas (atalho)", padding="5")
         frame_chk.pack(side=tk.RIGHT, padx=10)
-        self.var_ct = tk.BooleanVar(self, value=True)
-        self.var_nc = tk.BooleanVar(self, value=True)
-        self.var_sn = tk.BooleanVar(self, value=True)
-        ttk.Checkbutton(frame_chk, text="Contribuinte (CT)", variable=self.var_ct).pack(side=tk.LEFT, padx=5)
-        ttk.Checkbutton(frame_chk, text="Não Contrib. (NC)", variable=self.var_nc).pack(side=tk.LEFT, padx=5)
-        ttk.Checkbutton(frame_chk, text="Simples Nac. (SN)", variable=self.var_sn).pack(side=tk.LEFT, padx=5)
+        self.var_ct = tk.BooleanVar(self, value=False)
+        self.var_nc = tk.BooleanVar(self, value=False)
+        self.var_sn = tk.BooleanVar(self, value=False)
+        ttk.Checkbutton(frame_chk, text="Contribuinte (CT)", variable=self.var_ct,
+                        command=lambda: self._bulk_perfil('CT', self.var_ct.get())).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(frame_chk, text="Não Contrib. (NC)", variable=self.var_nc,
+                        command=lambda: self._bulk_perfil('NC', self.var_nc.get())).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(frame_chk, text="Simples Nac. (SN)", variable=self.var_sn,
+                        command=lambda: self._bulk_perfil('SN', self.var_sn.get())).pack(side=tk.LEFT, padx=5)
 
         # Footer (Empacotado primeiro no BOTTOM para não ser esmagado pela tabela)
         frame_bot = ttk.Frame(frame_left, padding="10")
@@ -100,16 +103,16 @@ class DialogoExportarIcms(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Cabeçalhos
-        headers = ["Nº Faixa *", "C/V *", "CFOP", "TIPO CLI", "CST", "% ICMS", "% Red", "% FCP", "UF Orig", "UF Dest", "cBenef", "Cód Cred", "% Cred", "% MVA", "% ST"]
+        # Cabeçalhos (CT/NC/SN por linha ao final: escolha em quais perfis a regra entra)
+        headers = ["Nº Faixa *", "C/V *", "CT", "NC", "SN", "CFOP", "TIPO CLI", "CST", "% ICMS", "% Red", "% FCP", "UF Orig", "UF Dest", "cBenef", "Cód Cred", "% Cred", "% MVA", "% ST"]
         for i, h in enumerate(headers):
             ttk.Label(scrollable_frame, text=h, font=("Segoe UI", 9, "bold")).grid(row=0, column=i, padx=5, pady=5)
-            
+
         for row_idx, item in enumerate(self.itens, start=1):
             ent_faixa = ttk.Entry(scrollable_frame, width=8, font=("Segoe UI", 9, "bold"))
             ent_faixa.grid(row=row_idx, column=0, padx=5, pady=2)
             self.inputs_faixa[item['id']] = ent_faixa
-            
+
             cb_cv = ttk.Combobox(scrollable_frame, values=["C", "V"], width=4, state="readonly", font=("Segoe UI", 9, "bold"))
             if str(item['cfop']).startswith(('5','6','7')):
                 cb_cv.set("V")
@@ -117,20 +120,31 @@ class DialogoExportarIcms(tk.Toplevel):
                 cb_cv.set("C")
             cb_cv.grid(row=row_idx, column=1, padx=5, pady=2)
             self.inputs_cv[item['id']] = cb_cv
-            
-            ttk.Label(scrollable_frame, text=item['cfop']).grid(row=row_idx, column=2, padx=5)
-            ttk.Label(scrollable_frame, text=item.get('tipo_cliente', 'NC')).grid(row=row_idx, column=3, padx=5)
-            ttk.Label(scrollable_frame, text=item['icms_cst']).grid(row=row_idx, column=4, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_icms']}%").grid(row=row_idx, column=5, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_red_bc']}%").grid(row=row_idx, column=6, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_fcp']}%").grid(row=row_idx, column=7, padx=5)
-            ttk.Label(scrollable_frame, text=item['uf_emit']).grid(row=row_idx, column=8, padx=5)
-            ttk.Label(scrollable_frame, text=item['uf_dest']).grid(row=row_idx, column=9, padx=5)
-            ttk.Label(scrollable_frame, text=item['c_benef'] or '-').grid(row=row_idx, column=10, padx=5)
-            ttk.Label(scrollable_frame, text=item['c_cred'] or '-').grid(row=row_idx, column=11, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_cred']}%" if item['p_cred'] else '-').grid(row=row_idx, column=12, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_mvast']}%" if item['p_mvast'] else '-').grid(row=row_idx, column=13, padx=5)
-            ttk.Label(scrollable_frame, text=f"{item['p_icmsst']}%" if item['p_icmsst'] else '-').grid(row=row_idx, column=14, padx=5)
+
+            # Perfis por linha: por padrão marca o perfil do próprio tipo de cliente da linha
+            tipo_row = str(item.get('tipo_cliente', '') or '').upper()
+            if tipo_row not in ('CT', 'NC', 'SN'):
+                tipo_row = 'CT'
+            perfis_vars = {}
+            for k, t in enumerate(('CT', 'NC', 'SN')):
+                var = tk.BooleanVar(self, value=(t == tipo_row))
+                ttk.Checkbutton(scrollable_frame, variable=var).grid(row=row_idx, column=2 + k, padx=5, pady=2)
+                perfis_vars[t] = var
+            self.inputs_perfil[item['id']] = perfis_vars
+
+            ttk.Label(scrollable_frame, text=item['cfop']).grid(row=row_idx, column=5, padx=5)
+            ttk.Label(scrollable_frame, text=item.get('tipo_cliente', 'NC')).grid(row=row_idx, column=6, padx=5)
+            ttk.Label(scrollable_frame, text=item['icms_cst']).grid(row=row_idx, column=7, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_icms']}%").grid(row=row_idx, column=8, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_red_bc']}%").grid(row=row_idx, column=9, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_fcp']}%").grid(row=row_idx, column=10, padx=5)
+            ttk.Label(scrollable_frame, text=item['uf_emit']).grid(row=row_idx, column=11, padx=5)
+            ttk.Label(scrollable_frame, text=item['uf_dest']).grid(row=row_idx, column=12, padx=5)
+            ttk.Label(scrollable_frame, text=item['c_benef'] or '-').grid(row=row_idx, column=13, padx=5)
+            ttk.Label(scrollable_frame, text=item['c_cred'] or '-').grid(row=row_idx, column=14, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_cred']}%" if item['p_cred'] else '-').grid(row=row_idx, column=15, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_mvast']}%" if item['p_mvast'] else '-').grid(row=row_idx, column=16, padx=5)
+            ttk.Label(scrollable_frame, text=f"{item['p_icmsst']}%" if item['p_icmsst'] else '-').grid(row=row_idx, column=17, padx=5)
 
         # --- LADO DIREITO (Consulta ERP) ---
         frame_right_top = ttk.Frame(frame_right, padding="5")
@@ -174,21 +188,9 @@ class DialogoExportarIcms(tk.Toplevel):
         self.ent_filial.insert(0, filial)
         self.ent_filial.config(state='readonly')
         
-        # Sugestão de Tipos de Cliente para Gravação
-        tipos = set(item.get('tipo_cliente', 'CT') for item in self.itens)
-        if 'CT' in tipos and 'NC' not in tipos:
-            self.var_ct.set(True)
-            self.var_sn.set(True)
-            self.var_nc.set(False)
-        elif 'NC' in tipos and 'CT' not in tipos:
-            self.var_ct.set(False)
-            self.var_sn.set(False)
-            self.var_nc.set(True)
-        else:
-            self.var_ct.set(True)
-            self.var_sn.set(True)
-            self.var_nc.set(True)
-            
+        # Os perfis agora são POR LINHA (default = tipo de cliente da própria linha).
+        # Os checkboxes do topo são apenas atalho para aplicar a todas de uma vez.
+
         # Configurar opções de UF no filtro baseadas no ERP
         self.cb_filtro_uf['values'] = ["TODAS"]
         self.cb_filtro_uf.current(0)
@@ -313,6 +315,12 @@ class DialogoExportarIcms(tk.Toplevel):
         except Exception as e:
             pass # Evita exibir pop-ups que irritem o usuário caso a tabela de visualização esteja com alguma conversão errada
 
+    def _bulk_perfil(self, tipo, valor):
+        """Atalho: aplica (marca/desmarca) um perfil em todas as linhas de uma vez."""
+        for perfis in self.inputs_perfil.values():
+            if tipo in perfis:
+                perfis[tipo].set(valor)
+
     def _confirmar(self):
         emp = self.ent_empresa.get().strip()
         fil = self.ent_filial.get().strip()
@@ -335,55 +343,79 @@ class DialogoExportarIcms(tk.Toplevel):
             print(f"Aviso ao buscar última data de ICMS: {e}")
             
         regras_export = []
-        
-        tipos_cf = []
-        if self.var_ct.get(): tipos_cf.append('CT')
-        if self.var_nc.get(): tipos_cf.append('NC')
-        if self.var_sn.get(): tipos_cf.append('SN')
+        sufixos = {'CT': 'CONT', 'NC': 'NCONT', 'SN': 'SIMP_NAC'}
+        ocupacao = {}     # (faixa, uf, perfil) -> assinatura da tributação
+        cv_por_faixa = {}  # (faixa, uf) -> 'C'/'V' (uma faixa é de um tipo só)
 
         for item in self.itens:
             faixa = self.inputs_faixa[item['id']].get().strip()
             if not faixa:
                 messagebox.showwarning("Aviso", f"Preencha a Faixa para o CFOP {item['cfop']}.", parent=self)
                 return
-                
+
             compra_venda = self.inputs_cv[item['id']].get().strip()
             if not compra_venda:
                 messagebox.showwarning("Aviso", f"Selecione C/V para o CFOP {item['cfop']}.", parent=self)
                 return
-                
+
+            # Uma faixa+UF é de um tipo só (Compra OU Venda). Não deixa misturar,
+            # senão o ERP grava em linhas separadas e "some" o outro perfil.
+            chave_cv = (faixa, item['uf_dest'])
+            if chave_cv in cv_por_faixa and cv_por_faixa[chave_cv] != compra_venda:
+                nome = {'C': 'Compra', 'V': 'Venda'}
+                messagebox.showwarning("Conflito Compra/Venda",
+                    f"A faixa {faixa} / {item['uf_dest']} está marcada como "
+                    f"{nome.get(cv_por_faixa[chave_cv], cv_por_faixa[chave_cv])} e "
+                    f"{nome.get(compra_venda, compra_venda)} ao mesmo tempo.\n\n"
+                    "Uma faixa é de um tipo só. Para juntar perfis (CT/NC/SN) na MESMA faixa, "
+                    "deixe todas as linhas com o mesmo C/V — ou use números de faixa diferentes.",
+                    parent=self)
+                return
+            cv_por_faixa[chave_cv] = compra_venda
+
+            perfis = self.inputs_perfil[item['id']]
+            tipos_cf = [t for t in ('CT', 'NC', 'SN') if perfis[t].get()]
+            if not tipos_cf:
+                messagebox.showwarning("Aviso",
+                    f"Marque ao menos um perfil (CT/NC/SN) para o CFOP {item['cfop']} (faixa {faixa}).",
+                    parent=self)
+                return
+
             cst_limpo = str(item['icms_cst']).replace('.', '').lstrip('0').zfill(3)
-            
+
             aliquota = item['p_icms'] if item['p_icms'] else None
             reducao = item['p_red_bc'] if item['p_red_bc'] else None
             cbenef = item['c_benef'] or None
             c_cred = item['c_cred'] or None
             p_cred = item['p_cred'] if item['p_cred'] else None
-            
+
+            # Valida conflito: mesmo (faixa, UF, perfil) com tributação diferente = sobreposição
+            assinatura = (cst_limpo, aliquota, reducao, cbenef, compra_venda)
+            for t in tipos_cf:
+                slot = (faixa, item['uf_dest'], t)
+                if slot in ocupacao and ocupacao[slot] != assinatura:
+                    messagebox.showwarning("Conflito de perfil",
+                        f"A faixa {faixa} / {item['uf_dest']} / perfil {t} está sendo definida por "
+                        "DUAS regras diferentes ao mesmo tempo.\n\nUse números de faixa diferentes, "
+                        "ou deixe cada regra num perfil distinto (ex.: uma no CT, outra no NC).",
+                        parent=self)
+                    return
+                ocupacao[slot] = assinatura
+
             regra = {
                 'AICMS_EMPRESA': emp, 'AICMS_FILIAL': fil, 'AICMS_DATA': data_vigencia,
                 'AICMS_FAIXA': faixa, 'AICMS_ESTADO': item['uf_dest'], 'AICMS_COMPRA_VENDA': compra_venda,
                 'CBE_C_CREDPRESUMIDO': c_cred, 'CBE_P_CREDPRESUMIDO': p_cred, 'tipos_cf': tipos_cf
             }
-            
-            if self.var_ct.get():
-                regra['AICMS_ALIQUOTA_CONT'] = aliquota
-                regra['AICMS_REDUCAO_CONT'] = reducao
-                regra['AICMS_SITUACAO_CONT'] = cst_limpo
-                regra['AICMS_CBENEF_CONT'] = cbenef
-                
-            if self.var_nc.get():
-                regra['AICMS_ALIQUOTA_NCONT'] = aliquota
-                regra['AICMS_REDUCAO_NCONT'] = reducao
-                regra['AICMS_SITUACAO_NCONT'] = cst_limpo
-                regra['AICMS_CBENEF_NCONT'] = cbenef
-                
-            if self.var_sn.get():
-                regra['AICMS_ALIQUOTA_SIMP_NAC'] = aliquota
-                regra['AICMS_REDUCAO_SIMP_NAC'] = reducao
-                regra['AICMS_SITUACAO_SIMP_NAC'] = cst_limpo
-                regra['AICMS_CBENEF_SIMP_NAC'] = cbenef
-                
+
+            # Grava SÓ os perfis marcados nesta linha (o importer mescla sem apagar os demais)
+            for t in tipos_cf:
+                s = sufixos[t]
+                regra[f'AICMS_ALIQUOTA_{s}'] = aliquota
+                regra[f'AICMS_REDUCAO_{s}'] = reducao
+                regra[f'AICMS_SITUACAO_{s}'] = cst_limpo
+                regra[f'AICMS_CBENEF_{s}'] = cbenef
+
             regras_export.append(regra)
             
         try:
@@ -401,7 +433,11 @@ class DialogoExportarIcms(tk.Toplevel):
                 elif hasattr(fb, 'db') and hasattr(fb.db, 'commit'):
                     fb.db.commit()
                     
-            messagebox.showinfo("Sucesso", f"{res['inseridos']} faixas cadastradas com sucesso!", parent=self)
+            n_faixas = len({(r['AICMS_FAIXA'], r['AICMS_ESTADO'], r['AICMS_COMPRA_VENDA']) for r in regras_export})
+            n_regras = len(regras_export)
+            messagebox.showinfo("Sucesso",
+                f"{n_faixas} faixa(s) gravada(s) com sucesso "
+                f"({n_regras} regra(s)/perfil aplicadas).", parent=self)
             self.destroy()
             self.callback_sucesso()
         except Exception as e:
@@ -422,9 +458,10 @@ class DialogoDetalhesFaixa(tk.Toplevel):
         self.faixas = [f.strip() for f in str(faixas_str).split(',') if f.strip() and f.strip() != '-']
         self.uf_dest = uf_dest
         self.fb_config = fb_config
-        
+
         self._criar_widgets()
         self._carregar_dados()
+        tema.centralizar(self, w, h)
 
     def _criar_widgets(self):
         frame_bot = ttk.Frame(self, padding="10")
@@ -530,10 +567,11 @@ class DialogoFaixasExistentes(tk.Toplevel):
         self.emp = config.get('IMPORTACAO', 'empresa', fallback='1')
         self.fil = config.get('IMPORTACAO', 'filial', fallback='1')
         self.fb_config = fb_config
-        
+
         self._criar_widgets()
         self._carregar_dados()
-        
+        tema.centralizar(self, w, h)
+
     def resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
@@ -713,36 +751,54 @@ class TelaIcms(ttk.Frame):
         self._criar_widgets()
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="MATRIZ DE FAIXAS DE ICMS (UF x UF)", font=("Segoe UI", 14, "bold"), fg="#8E44AD")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Faixas de ICMS",
+            "Construção e auditoria das regras de ICMS por estado a partir do histórico de XMLs"
+        ).pack(fill=tk.X)
 
-        frame_dir = ttk.Frame(self)
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_ver_faixas = tema.botao_sidebar(sidebar, "👁   Ver Faixas no ERP", self._ver_faixas_existentes)
+        self.btn_ver_faixas.pack(fill=tk.X)
+
+        self.btn_analisar = tema.botao_sidebar(sidebar, "🔍   Analisar XMLs", self._iniciar_analise, cor_fg="#7EE0A0")
+        self.btn_analisar.pack(fill=tk.X)
+
+        self.btn_exportar = tema.botao_sidebar(sidebar, "🚀   Enviar Selecionados p/ ERP", self._preparar_exportacao, cor_fg="#7EE0A0")
+        self.btn_exportar.config(state=tk.DISABLED)
+        self.btn_exportar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        frame_dir = ttk.Frame(content)
         frame_dir.pack(fill=tk.X, pady=10)
-        
+
         self.ent_pasta = ttk.Entry(frame_dir, width=60)
         self.ent_pasta.pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_analisar = ttk.Button(frame_dir, text="🔍 Analisar XMLs", command=self._iniciar_analise)
-        self.btn_analisar.pack(side=tk.RIGHT, padx=5)
-        
-        self.btn_ver_faixas = ttk.Button(frame_dir, text="👁 Ver Faixas no ERP", command=self._ver_faixas_existentes)
-        self.btn_ver_faixas.pack(side=tk.RIGHT, padx=5)
 
-        self.lbl_status = ttk.Label(self, text="Aguardando importação...", font=("Segoe UI", 9))
+        self.lbl_status = ttk.Label(content, text="Aguardando importação...", font=("Segoe UI", 9))
         self.lbl_status.pack(anchor=tk.W)
 
-        # Rodapé (Empacotado primeiro no BOTTOM para garantir que fique visível e não cortado pela barra de tarefas)
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        self.btn_exportar = ttk.Button(frame_fim, text="🚀 Enviar Selecionados p/ ERP", state=tk.DISABLED, command=self._preparar_exportacao)
-        self.btn_exportar.pack(side=tk.RIGHT, padx=5)
-
         # Grade
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")

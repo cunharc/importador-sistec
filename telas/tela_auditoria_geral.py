@@ -9,6 +9,17 @@ import logging
 import glob
 
 from utils.xml_reader import parse_nfe
+from utils import tema
+
+
+def _csv_val(v):
+    """Forca texto no Excel para numeros longos (EAN, chave NF-e, CNPJ, NCM),
+    senao o Excel corta ou converte para notacao cientifica ao abrir o CSV."""
+    s = '' if v is None else str(v)
+    if s.isdigit() and len(s) >= 8:
+        return f'="{s}"'
+    return s
+
 
 class DialogoDetalheItens(tk.Toplevel):
     def __init__(self, parent, itens):
@@ -24,6 +35,7 @@ class DialogoDetalheItens(tk.Toplevel):
         self.itens = itens
         self._criar_widgets()
         self._carregar_dados()
+        tema.centralizar(self, w, h)
 
     def _criar_widgets(self):
         frame_top = ttk.Frame(self, padding="5")
@@ -36,11 +48,11 @@ class DialogoDetalheItens(tk.Toplevel):
         frame_grade = ttk.Frame(self, padding="5")
         frame_grade.pack(fill=tk.BOTH, expand=True)
 
-        self.colunas = ("Nº NFE", "EMISSÃO", "CHAVE", "CNPJ/CPF DEST", "RAZÃO SOCIAL DEST", "CÓD. PROD", "PRODUTO", "QTD", "V. UN", "V. TOTAL", "ARQUIVO")
+        self.colunas = ("Nº NFE", "EMISSÃO", "CHAVE", "CNPJ/CPF DEST", "RAZÃO SOCIAL DEST", "CÓD. PROD", "PRODUTO", "EAN", "UNID", "QTD", "V. UN", "V. TOTAL", "ARQUIVO")
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         self.tree.bind("<Double-1>", self._ao_duplo_clique)
-        
-        larguras = [80, 90, 220, 120, 180, 100, 200, 60, 80, 80, 150]
+
+        larguras = [80, 90, 220, 120, 180, 100, 200, 110, 50, 60, 80, 80, 150]
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col)
             anchor = tk.W if col in ("PRODUTO", "RAZÃO SOCIAL DEST", "ARQUIVO") else tk.CENTER
@@ -85,8 +97,8 @@ class DialogoDetalheItens(tk.Toplevel):
         top.title("Todos os Campos do Item")
         w = min(700, int(self.winfo_screenwidth() * 0.6))
         h = min(600, int(self.winfo_screenheight() * 0.7))
-        top.geometry(f"{w}x{h}")
         top.transient(self)
+        tema.centralizar(top, w, h)
         top.grab_set()
 
         frame = ttk.Frame(top, padding="10")
@@ -134,11 +146,13 @@ class DialogoDetalheItens(tk.Toplevel):
             razao = str(i.get('dest_nome', i.get('emit_nome', '')))
             cprod = str(i.get('c_prod', ''))
             xprod = str(i.get('x_prod', ''))
+            ean = str(i.get('c_ean', '') or '')
+            unid = str(i.get('u_com', ''))
             qtd = str(i.get('q_com', ''))
             vun = str(i.get('v_un_com', ''))
             vtot = str(i.get('v_prod', ''))
             arquivo = os.path.basename(i.get('_xml_path', ''))
-            self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, qtd, vun, vtot, arquivo))
+            self.tree.insert("", tk.END, values=(nfe, dh_emi, chave, cnpj, razao, cprod, xprod, ean, unid, qtd, vun, vtot, arquivo))
 
     def _exportar_csv(self):
         caminho = filedialog.asksaveasfilename(defaultextension=".csv", initialfile="Detalhamento_Itens.csv", filetypes=[("CSV", "*.csv")])
@@ -148,7 +162,7 @@ class DialogoDetalheItens(tk.Toplevel):
                 writer = csv.writer(f, delimiter=';')
                 writer.writerow(self.colunas)
                 for child in self.tree.get_children():
-                    writer.writerow(self.tree.item(child, "values"))
+                    writer.writerow([_csv_val(v) for v in self.tree.item(child, "values")])
             messagebox.showinfo("Sucesso", "Exportação concluída!", parent=self)
         except Exception as e:
             messagebox.showerror("Erro", str(e), parent=self)
@@ -173,25 +187,51 @@ class TelaAuditoriaGeral(ttk.Frame):
         self._criar_widgets()
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="AUDITORIA GERAL DE TRIBUTAÇÃO (GERENCIAL)", font=("Segoe UI", 14, "bold"), fg="#2C3E50")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Visão Gerencial (Completa)",
+            "Auditoria completa agrupando Produto, NCM, CFOP, ICMS, PIS/COFINS e RT com exportação"
+        ).pack(fill=tk.X)
 
-        frame_dir = ttk.Frame(self)
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_carregar = tema.botao_sidebar(sidebar, "📥   Carregar XMLs", self._carregar_xmls, cor_fg="#7EE0A0")
+        self.btn_carregar.pack(fill=tk.X)
+
+        self.btn_exportar = tema.botao_sidebar(sidebar, "📋   Exportar Visão Atual (CSV)", self._exportar_csv, cor_fg="#7EE0A0")
+        self.btn_exportar.config(state=tk.DISABLED)
+        self.btn_exportar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        frame_dir = ttk.Frame(content)
         frame_dir.pack(fill=tk.X, pady=5)
-        
+
         self.ent_pasta = ttk.Entry(frame_dir, width=50)
         self.ent_pasta.pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📁 Pasta", command=self._selecionar_pasta).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_dir, text="📄 Arquivos", command=self._selecionar_arquivos).pack(side=tk.LEFT, padx=2)
-        
-        self.btn_carregar = ttk.Button(frame_dir, text="📥 Carregar XMLs", command=self._carregar_xmls)
-        self.btn_carregar.pack(side=tk.LEFT, padx=15)
 
         self.lbl_status = ttk.Label(frame_dir, text="Aguardando...", font=("Segoe UI", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
         # Frame de Agrupamento Dinâmico
-        frame_grp = ttk.LabelFrame(self, text="Opções de Agrupamento (Selecione como deseja montar a visão)", padding="10")
+        frame_grp = ttk.LabelFrame(content, text="Opções de Agrupamento (Selecione como deseja montar a visão)", padding="10")
         frame_grp.pack(fill=tk.X, pady=5)
 
         self.var_grp_prod = tk.BooleanVar(self, value=False)
@@ -214,7 +254,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         ttk.Checkbutton(frame_grp, text="Reforma Tributária (IBS/CBS)", variable=self.var_grp_rt, command=self._processar_agrupamento).grid(row=1, column=3, sticky=tk.W, padx=10, pady=5)
 
         # Filtros Dinâmicos
-        frame_filtros = ttk.LabelFrame(self, text="Filtros Específicos (Marque quais deseja ver)", padding="10")
+        frame_filtros = ttk.LabelFrame(content, text="Filtros Específicos (Marque quais deseja ver)", padding="10")
         frame_filtros.pack(fill=tk.X, pady=5)
         
         ttk.Button(frame_filtros, text="Filtro NCM", command=lambda: self._abrir_filtro('NCM')).pack(side=tk.LEFT, padx=5)
@@ -224,11 +264,11 @@ class TelaAuditoriaGeral(ttk.Frame):
         ttk.Button(frame_filtros, text="Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=15)
 
         # Grade
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.colunas = (
-            "QTD", "PRODUTO", "NCM", "DESCRIÇÃO NCM", "DESCR CONCAT NCM",
+            "QTD", "CÓD. PROD", "DESCRIÇÃO", "EAN", "UNID", "NCM", "DESCRIÇÃO NCM", "DESCR CONCAT NCM",
             "CFOP", "UF DEST", "TIPO CLI",
             "CST ICMS", "% ICMS", "% RED.BC", "CBENEF",
             "CST PIS", "% PIS", "CST COF", "% COF",
@@ -239,15 +279,15 @@ class TelaAuditoriaGeral(ttk.Frame):
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
         self.tree.bind("<Double-1>", self._abrir_detalhes)
-        
-        larguras = [40, 200, 80, 200, 200, 50, 60, 70, 
-                    70, 60, 60, 80, 
-                    60, 50, 60, 50, 
+
+        larguras = [40, 90, 200, 110, 50, 80, 200, 200, 50, 60, 70,
+                    70, 60, 60, 80,
+                    60, 50, 60, 50,
                     90, 60, 50, 50]
         
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col + " ↕", command=lambda c=col: self._sort_treeview(c))
-            anchor = tk.W if col in ("PRODUTO", "DESCRIÇÃO NCM", "DESCR CONCAT NCM") else tk.CENTER
+            anchor = tk.W if col in ("DESCRIÇÃO", "DESCRIÇÃO NCM", "DESCR CONCAT NCM") else tk.CENTER
             self.tree.column(col, width=larg, anchor=anchor)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
@@ -257,14 +297,6 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
-
-        # Rodapé
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
-        ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.LEFT, padx=5)
-        
-        self.btn_exportar = ttk.Button(frame_fim, text="📋 Exportar Visão Atual (CSV)", state=tk.DISABLED, command=self._exportar_csv)
-        self.btn_exportar.pack(side=tk.RIGHT, padx=5)
 
     def _abrir_detalhes(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -325,8 +357,8 @@ class TelaAuditoriaGeral(ttk.Frame):
         self._progress_popup.title("Carregando XMLs")
         w_p = min(500, int(self.winfo_screenwidth() * 0.5))
         h_p = min(150, int(self.winfo_screenheight() * 0.2))
-        self._progress_popup.geometry(f"{w_p}x{h_p}")
         self._progress_popup.transient(self.winfo_toplevel())
+        tema.centralizar(self._progress_popup, w_p, h_p)
         self._progress_popup.grab_set()
         self._progress_popup.protocol("WM_DELETE_WINDOW", lambda: None)
 
@@ -443,7 +475,11 @@ class TelaAuditoriaGeral(ttk.Frame):
         linhas = []
         for grupo_itens in mapa.values():
             qtd = len(grupo_itens)
-            produtos = [f"{i.get('c_prod', i.get('cProd', ''))} - {i.get('x_prod', i.get('xProd', ''))}" for i in grupo_itens]
+            cod_prods = [str(i.get('c_prod', i.get('cProd', ''))) for i in grupo_itens]
+            desc_prods = [str(i.get('x_prod', i.get('xProd', ''))) for i in grupo_itens]
+            eans = ['' if str(i.get('c_ean') or '').strip().upper() in ('SEM GTIN', 'SEMGTIN', '0', '00000000000000')
+                    else str(i.get('c_ean') or '').strip() for i in grupo_itens]
+            unidades = [i.get('u_com', '') for i in grupo_itens]
             ncms = [i.get('ncm', '') for i in grupo_itens]
             desc_ncms = []
             desc_concat_ncms = []
@@ -476,7 +512,7 @@ class TelaAuditoriaGeral(ttk.Frame):
             p_cbs = [i.get('p_cbs', 0) for i in grupo_itens]
             
             val = (
-                qtd, self._get_distinct(produtos), self._get_distinct(ncms),
+                qtd, self._get_distinct(cod_prods), self._get_distinct(desc_prods), self._get_distinct(eans), self._get_distinct(unidades), self._get_distinct(ncms),
                 self._get_distinct(desc_ncms), self._get_distinct(desc_concat_ncms),
                 self._get_distinct(cfops), self._get_distinct(ufs), self._get_distinct(tipos),
                 self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds), self._get_distinct(cbenefs),
@@ -534,8 +570,8 @@ class TelaAuditoriaGeral(ttk.Frame):
         
         top = tk.Toplevel(self)
         top.title(f"Filtrar por {coluna}")
-        top.geometry("350x450")
         top.transient(self.winfo_toplevel())
+        tema.centralizar(top, 350, 450)
         top.grab_set()
 
         frame_search = ttk.Frame(top)
@@ -625,7 +661,7 @@ class TelaAuditoriaGeral(ttk.Frame):
                 writer = csv.writer(f, delimiter=';')
                 writer.writerow(self.colunas)
                 for child in self.tree.get_children():
-                    writer.writerow(self.tree.item(child, "values"))
+                    writer.writerow([_csv_val(v) for v in self.tree.item(child, "values")])
             messagebox.showinfo("Sucesso", "Exportação concluída!")
         except Exception as e:
             messagebox.showerror("Erro", str(e))

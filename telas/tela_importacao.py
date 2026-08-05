@@ -5,6 +5,7 @@ import os
 import sys
 from PIL import Image, ImageTk
 from telas.tela_preview import TelaPreview
+from utils import tema
 import utils.excel_reader as excel_reader
 import utils.regras_negocio as regras_negocio
 import utils.firebird_conn as fb
@@ -36,23 +37,48 @@ class TelaImportacao(ttk.Frame):
         return os.path.join(base_path, relative_path)
 
     def _criar_widgets(self):
-        # Header do Módulo
-        lbl_title = tk.Label(self, text="IMPORTAÇÃO DE PLANO DE CONTAS VIA EXCEL", font=("Segoe UI", 14, "bold"), fg="#C8001E")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Plano de Contas",
+            "Importação estruturada do plano de contas via Excel para o Firebird"
+        ).pack(fill=tk.X)
 
-        # Logo SISTEC
-        logo_path = self.resource_path("sistec.jpg")
-        if os.path.exists(logo_path):
-            try:
-                img = Image.open(logo_path)
-                img.thumbnail((250, 100)) # Redimensiona a logo mantendo a proporção
-                self.logo_img = ImageTk.PhotoImage(img)
-                ttk.Label(self, image=self.logo_img).pack(pady=5)
-            except Exception as e:
-                print("Erro ao carregar logo:", e)
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
+
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
+
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        self.btn_abrir_planilha = tema.botao_sidebar(sidebar, "📂   Abrir Planilha", self._abrir_planilha)
+        self.btn_abrir_planilha.pack(fill=tk.X)
+
+        self.btn_preview = tema.botao_sidebar(sidebar, "👁   Preview Completo", self._abrir_preview)
+        self.btn_preview.config(state=tk.DISABLED)
+        self.btn_preview.pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Importar p/ Banco", self._iniciar_importacao, cor_fg="#7EE0A0")
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        self.btn_cancelar = tema.botao_sidebar(sidebar, "🛑   Cancelar", self._cancelar, cor_fg="#FF9B9B")
+        self.btn_cancelar.config(state=tk.DISABLED)
+        self.btn_cancelar.pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
 
         # Frame Configurações Iniciais
-        frame_config = ttk.LabelFrame(self, text="Parâmetros Base", padding="10")
+        frame_config = ttk.LabelFrame(content, text="Parâmetros Base", padding="10")
         frame_config.pack(fill=tk.X, pady=5)
 
         ttk.Label(frame_config, text="Empresa:").grid(row=0, column=0, padx=5)
@@ -71,7 +97,7 @@ class TelaImportacao(ttk.Frame):
         self.chk_limpar.grid(row=1, column=0, columnspan=6, sticky=tk.W, padx=5, pady=10)
 
         # Frame Arquivo Excel
-        frame_excel = ttk.LabelFrame(self, text="Arquivo Excel", padding="10")
+        frame_excel = ttk.LabelFrame(content, text="Arquivo Excel", padding="10")
         frame_excel.pack(fill=tk.X, pady=5)
 
         ttk.Label(frame_excel, text="Arquivo Excel:").grid(row=0, column=0, sticky=tk.W, padx=5)
@@ -99,15 +125,8 @@ class TelaImportacao(ttk.Frame):
         self.ent_nivel_sint = ttk.Entry(frame_excel, width=10)
         self.ent_nivel_sint.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
 
-        # Ações Principais
-        frame_acoes = ttk.Frame(self, padding="5")
-        frame_acoes.pack(fill=tk.X)
-
-        self.btn_abrir_planilha = ttk.Button(frame_acoes, text="📂 ABRIR PLANILHA", command=self._abrir_planilha)
-        self.btn_abrir_planilha.pack(side=tk.LEFT, padx=5)
-
         # Filtro rápido
-        frame_filtro = ttk.Frame(self, padding="5")
+        frame_filtro = ttk.Frame(content, padding="5")
         frame_filtro.pack(fill=tk.X)
         ttk.Label(frame_filtro, text="🔍 Filtrar:").pack(side=tk.LEFT)
         self.ent_filtro_import = ttk.Entry(frame_filtro, width=30)
@@ -115,7 +134,7 @@ class TelaImportacao(ttk.Frame):
         self.ent_filtro_import.bind("<KeyRelease>", self._filtrar_dados)
 
         # Grade (Treeview preview rápido)
-        frame_grade = ttk.Frame(self)
+        frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=10)
 
         colunas = ("CONTA", "DESCRIÇÃO", "NÍV", "RED", "NAT", "STATUS")
@@ -128,9 +147,9 @@ class TelaImportacao(ttk.Frame):
             anchor = tk.W if col in ["CONTA", "DESCRIÇÃO"] else tk.CENTER
             self.tree.column(col, width=larg, anchor=anchor)
 
-        # Configura as cores (Tags) para as linhas da grade
-        self.tree.tag_configure('DUPLICADA', background='#FADBD8') # Vermelho claro (Sistec)
-        self.tree.tag_configure('ERRO', background='#F5B7B1')
+        # Configura as cores (Tags) para as linhas da grade (camada semântica)
+        self.tree.tag_configure('DUPLICADA', background=tema.WARNING_CT)  # amarelo suave = alerta
+        self.tree.tag_configure('ERRO', background=tema.ERROR_CT)          # vermelho suave = erro
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
@@ -138,33 +157,17 @@ class TelaImportacao(ttk.Frame):
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Status e Progresso
-        frame_status = ttk.Frame(self)
+        frame_status = ttk.Frame(content)
         frame_status.pack(fill=tk.X)
 
         self.lbl_status = ttk.Label(frame_status, text="Total de linhas lidas: 0 | Erros: 0")
         self.lbl_status.pack(anchor=tk.W)
 
         style = ttk.Style()
-        style.configure("Red.Horizontal.TProgressbar", background="#E74C3C")
+        style.configure("Red.Horizontal.TProgressbar", background=tema.SISTEC_RED)
 
         self.progresso = ttk.Progressbar(frame_status, orient=tk.HORIZONTAL, length=100, mode='determinate')
         self.progresso.pack(fill=tk.X, pady=5)
-
-        # Ações Finais
-        frame_fim = ttk.Frame(self)
-        frame_fim.pack(fill=tk.X, pady=10)
-
-        self.btn_voltar = ttk.Button(frame_fim, text="⬅ VOLTAR", command=self._fechar_tela)
-        self.btn_voltar.pack(side=tk.LEFT, padx=5)
-
-        self.btn_cancelar = ttk.Button(frame_fim, text="🛑 CANCELAR", command=self._cancelar, state=tk.DISABLED)
-        self.btn_cancelar.pack(side=tk.LEFT, padx=5)
-
-        self.btn_importar = ttk.Button(frame_fim, text="🚀 IMPORTAR PARA O BANCO", command=self._iniciar_importacao, state=tk.DISABLED)
-        self.btn_importar.pack(side=tk.RIGHT, padx=5)
-
-        self.btn_preview = ttk.Button(frame_fim, text="👁 PREVIEW COMPLETO", command=self._abrir_preview, state=tk.DISABLED)
-        self.btn_preview.pack(side=tk.RIGHT, padx=5)
 
     def _fechar_tela(self):
         print("❌ Instância de TelaImportacao destruída.")

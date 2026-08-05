@@ -8,8 +8,43 @@ import os
 import re
 import sys
 from utils.logger import get_logger
+from utils import tipo_cadastro
+from utils import multivalor
 
 _log = get_logger('firebird_conn')
+
+_tamanhos_colunas_cache = {}
+
+def obter_tamanhos_colunas(conn, tabela):
+    """Retorna {NOME_COLUNA: tamanho} para colunas CHAR/VARCHAR de uma tabela.
+
+    Usado para truncar valores antes do INSERT e evitar erros
+    'Value of parameter is too long'. O resultado é cacheado por tabela.
+    """
+    tabela = tabela.upper()
+    if tabela in _tamanhos_colunas_cache:
+        return _tamanhos_colunas_cache[tabela]
+
+    tamanhos = {}
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT TRIM(rf.RDB$FIELD_NAME),
+                   COALESCE(f.RDB$CHARACTER_LENGTH, f.RDB$FIELD_LENGTH)
+            FROM RDB$RELATION_FIELDS rf
+            JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+            WHERE rf.RDB$RELATION_NAME = ?
+              AND f.RDB$FIELD_TYPE IN (14, 37)
+            """,
+            (tabela,)
+        )
+        tamanhos = {nome: tam for nome, tam in cur.fetchall() if tam}
+    except Exception as e:
+        _log.warning(f"Não foi possível ler tamanhos de colunas de {tabela}: {e}")
+
+    _tamanhos_colunas_cache[tabela] = tamanhos
+    return tamanhos
 
 def carregar_config():
     config = configparser.ConfigParser()
@@ -477,12 +512,21 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
         (empresa, filial)
     )
     codigos_usados = set(row[0] for row in cur.fetchall())
-    
+
+    # Tamanhos reais das colunas texto, para truncar e evitar erro "too long"
+    tam_col = obter_tamanhos_colunas(conn, 'TABELA_CLI_FOR')
+    def _trunc(valor, coluna):
+        if valor is None:
+            return valor
+        limite = tam_col.get(coluna)
+        s = str(valor)
+        return s[:limite] if limite else s
+
     sql = """
         INSERT INTO TABELA_CLI_FOR (
             CF_EMPRESA, CF_FILIAL, CF_CODIGO, CF_DATA, CF_DATA_ALT,
             CF_CPF_CGC, CF_RAZAO, CF_FANTASIA,
-            CF_ATIVO, CF_TIPO_INSCR, CF_CLIENTE, CF_FORNECEDOR,
+            CF_ATIVO, CF_TIPO_INSCR, CF_CLIENTE, CF_FORNECEDOR, CF_OUTROS,
             CF_RG_IE, CF_ICMS, CF_ATIVIDADE,
                 CF_ENDERECO, CF_NRO_END, CF_BAIRRO, CF_CIDADE, CF_CEP,
                 CF_ENDERECO2, CF_NRO_END2, CF_BAIRRO2, CF_CIDADE2, CF_CEP2,
@@ -497,7 +541,7 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
         ) VALUES (
             ?, ?, ?, CURRENT_DATE, CURRENT_DATE,
             ?, ?, ?,
-            'S', ?, ?, ?,
+            'S', ?, ?, ?, ?,
             ?, ?, ?,
                 ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?,
@@ -522,37 +566,40 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
                 conn.rollback()
                 return False, inseridos, erros
             
-            end = reg.get('endereco', '')
-            nro = reg.get('nro_end', '')
-            bairro = reg.get('bairro', '')
+            end = _trunc(reg.get('endereco', ''), 'CF_ENDERECO')
+            nro = _trunc(reg.get('nro_end', ''), 'CF_NRO_END')
+            bairro = _trunc(reg.get('bairro', ''), 'CF_BAIRRO')
             cid = reg.get('cidade_ibge', '')
-            cep = reg.get('cep', '')
-            
+            cep = _trunc(reg.get('cep', ''), 'CF_CEP')
+
             cgc_unformatted = ''.join(filter(str.isdigit, reg.get('documento', '') or ''))
-            cgc = reg.get('documento_formatado') or reg.get('documento', '')
-            
-            razao = str(reg.get('razao', ''))[:60]
-            fantasia = str(reg.get('fantasia', ''))[:60]
-            
+            cgc = _trunc(reg.get('documento_formatado') or reg.get('documento', ''), 'CF_CPF_CGC')
+
+            razao = _trunc(reg.get('razao', ''), 'CF_RAZAO')
+            fantasia = _trunc(reg.get('fantasia', ''), 'CF_FANTASIA')
+
             tipo_inscr = 1 if len(cgc_unformatted) == 11 else 2
-            
-            cliente = 'S' if reg.get('tipo', '') == 'Cliente' else 'N'
-            fornecedor = 'S' if reg.get('tipo', '') == 'Fornecedor' else 'N'
-            
+
+            # O tipo vem da grade (a coluna TIPO é editável), não mais só do papel no
+            # XML: quem compra e vende do mesmo CNPJ entra como cliente E fornecedor.
+            cliente, fornecedor, outros = tipo_cadastro.sn(reg.get('tipo', ''))
+
             ie_bruta = str(reg.get('ie', '')).strip().upper()
             if not ie_bruta or ie_bruta == 'ISENTO':
                 rg_ie = 'ISENTO'
                 cf_icms = 2
             else:
-                rg_ie = ie_bruta[:20]
+                rg_ie = _trunc(ie_bruta, 'CF_RG_IE')
                 cf_icms = 1
-                
+
             cf_atividade = 1
-            
-            fone1 = str(reg.get('fone1', ''))[:15]
-            fone2 = str(reg.get('fone2', ''))[:15]
-            fax = str(reg.get('fax', ''))[:15]
-            email = str(reg.get('email', ''))[:60]
+
+            # último ponto antes de gravar: um valor por campo. Dois e-mails no
+            # CF_EMAIL_NFE fazem a SEFAZ rejeitar a nota do cliente.
+            fone1 = _trunc(multivalor.um_fone(reg.get('fone1', ''))[0], 'CF_FONE1')
+            fone2 = _trunc(multivalor.um_fone(reg.get('fone2', ''))[0], 'CF_FONE2')
+            fax = _trunc(multivalor.um_fone(reg.get('fax', ''))[0], 'CF_FAX')
+            email = _trunc(multivalor.um_email(reg.get('email', ''))[0], 'CF_EMAIL')
             cod_antigo = reg.get('cf_cod_antigo')
 
             # Usa a condicao de pagamento já processada pela tela, ou busca/cria se não processada
@@ -575,7 +622,7 @@ def inserir_clientes_nfe(conn, registros, empresa, filial, callback_progresso=No
             valores = (
                 empresa, filial, cf_codigo,
                 cgc, razao, fantasia,
-                tipo_inscr, cliente, fornecedor,
+                tipo_inscr, cliente, fornecedor, outros,
                 rg_ie, cf_icms, cf_atividade,
                 end, nro, bairro, cid, cep,
                 end, nro, bairro, cid, cep,

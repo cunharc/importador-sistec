@@ -9,6 +9,7 @@ import csv
 
 from utils.firebird_service import FirebirdService
 from utils.xml_reader import parse_nfe_folder, parse_nfe
+from utils import tema
 
 
 _ABREV = {
@@ -77,6 +78,11 @@ class TelaCfop(ttk.Frame):
         self.editando_codigo = None
         self.all_tree_iids = []
 
+        # Regras de Reforma Tributária (para vincular faixa RT ao CFOP)
+        self.regras_rt = []
+        self.opcoes_rt = []
+        self.rt_map = {}          # opção exibida -> id (str)
+        self.rt_id_to_opt = {}    # id (str) -> opção exibida
 
         self.config = configparser.ConfigParser()
         self.config.read('config.ini', encoding='utf-8')
@@ -116,25 +122,48 @@ class TelaCfop(ttk.Frame):
                 print(f"Erro ao carregar cfop_governo.json: {e}")
 
     def _criar_widgets(self):
-        lbl_title = tk.Label(self, text="IMPORTAÇÃO DE CFOP VIA XML (TABELA_NAT_OPERACAO_SAIDA)",
-                             font=("Segoe UI", 14, "bold"), fg="#D35400")
-        lbl_title.pack(anchor=tk.W, pady=(0, 10))
+        # Header do módulo (identidade Sistecweb)
+        tema.montar_header(
+            self, "Tributação CFOP",
+            "Definição de naturezas de operação e regras contábeis por CFOP"
+        ).pack(fill=tk.X)
 
-        frame_acoes = ttk.Frame(self)
-        frame_acoes.pack(fill=tk.X, pady=(0, 5))
+        # ===================== CORPO: menu lateral + conteúdo =====================
+        corpo = tk.Frame(self, bg=tema.BG_BASE)
+        corpo.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Button(frame_acoes, text="📂 Carregar XMLs", command=self._analisar_xmls).pack(side=tk.LEFT, padx=2)
-        self.btn_importar = ttk.Button(frame_acoes, text="💾 Importar Selecionados", command=self._importar_selecionados, state=tk.DISABLED)
-        self.btn_importar.pack(side=tk.LEFT, padx=2)
-        ttk.Button(frame_acoes, text="➕ Novo", command=self._novo_cfop).pack(side=tk.LEFT, padx=2)
-        self.btn_salvar = ttk.Button(frame_acoes, text="💾 Salvar", command=self._salvar_cfop)
-        self.btn_salvar.pack(side=tk.LEFT, padx=2)
-        self.btn_excluir = ttk.Button(frame_acoes, text="🗑 Desativar", command=self._desativar_cfop)
-        self.btn_excluir.pack(side=tk.LEFT, padx=2)
-        ttk.Button(frame_acoes, text="📋 Exportar CSV", command=self._exportar_csv).pack(side=tk.LEFT, padx=2)
-        ttk.Button(frame_acoes, text="⬅ VOLTAR", command=self._fechar_tela).pack(side=tk.RIGHT, padx=5)
+        # -------- MENU LATERAL (padrão do main) --------
+        sidebar = tema.montar_sidebar(corpo)
 
-        frame_filtro = ttk.Frame(self)
+        # Rodapé do menu: Voltar
+        rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
+        rodape_sb.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+        self.btn_voltar = tema.botao_sidebar(rodape_sb, "⎋   Voltar", self._fechar_tela)
+        self.btn_voltar.pack(fill=tk.X)
+
+        tema.titulo_sidebar(sidebar, "AÇÕES").pack(fill=tk.X, pady=(16, 4))
+
+        tema.botao_sidebar(sidebar, "📂   Carregar XMLs", self._analisar_xmls).pack(fill=tk.X)
+
+        self.btn_importar = tema.botao_sidebar(sidebar, "📥   Importar Selecionados", self._importar_selecionados)
+        self.btn_importar.config(state=tk.DISABLED)
+        self.btn_importar.pack(fill=tk.X)
+
+        tema.botao_sidebar(sidebar, "➕   Novo", self._novo_cfop).pack(fill=tk.X)
+
+        self.btn_salvar = tema.botao_sidebar(sidebar, "💾   Salvar", self._salvar_cfop, cor_fg="#7EE0A0")
+        self.btn_salvar.pack(fill=tk.X)
+
+        self.btn_excluir = tema.botao_sidebar(sidebar, "🗑   Desativar", self._desativar_cfop, cor_fg="#FF9B9B")
+        self.btn_excluir.pack(fill=tk.X)
+
+        tema.botao_sidebar(sidebar, "📋   Exportar CSV", self._exportar_csv).pack(fill=tk.X)
+
+        # -------- CONTEÚDO --------
+        content = tk.Frame(corpo, bg=tema.BG_BASE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+
+        frame_filtro = ttk.Frame(content)
         frame_filtro.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(frame_filtro, text="Buscar:").pack(side=tk.LEFT, padx=(0, 5))
         self.var_filtro = tk.StringVar(self)
@@ -142,10 +171,10 @@ class TelaCfop(ttk.Frame):
         self.ent_filtro.pack(side=tk.LEFT, padx=(0, 5))
         self.ent_filtro.bind('<KeyRelease>', self._filtrar_tree)
 
-        self.lbl_info = ttk.Label(self, text="Carregando CFOPs do ERP...", font=("Segoe UI", 9))
+        self.lbl_info = ttk.Label(content, text="Carregando CFOPs do ERP...", font=("Segoe UI", 9))
         self.lbl_info.pack(anchor=tk.W)
 
-        frame_principal = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        frame_principal = ttk.PanedWindow(content, orient=tk.HORIZONTAL)
         frame_principal.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
 
         frame_tree = ttk.Frame(frame_principal)
@@ -154,7 +183,7 @@ class TelaCfop(ttk.Frame):
         frame_principal.add(frame_tree, weight=2)
         frame_principal.add(frame_form, weight=1)
 
-        colunas = ("CÓDIGO", "DESCRIÇÃO", "QTD XML", "STATUS ERP", "ICMS", "PIS", "COFINS", "ATIVO")
+        colunas = ("CÓDIGO", "DESCRIÇÃO", "QTD XML", "STATUS ERP", "ICMS", "PIS", "COFINS", "DESATIVADO")
         self._sort_directions = {col: False for col in colunas}
         self.tree = ttk.Treeview(frame_tree, columns=colunas, show="headings", height=15)
         larguras = [80, 250, 70, 100, 50, 50, 50, 60]
@@ -167,7 +196,7 @@ class TelaCfop(ttk.Frame):
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.tag_configure('INATIVO', foreground='#999999')
-        self.tree.tag_configure('NOVO', foreground='#C0392B', font=("Segoe UI", 9, "bold"))
+        self.tree.tag_configure('NOVO', foreground='#C80000', font=("Segoe UI", 9, "bold"))
 
         self._criar_form_edicao(frame_form)
 
@@ -253,6 +282,11 @@ class TelaCfop(ttk.Frame):
         ttk.Label(g2, text="Desativado:").grid(row=row2, column=4, sticky=tk.W, padx=3, pady=2)
         self.var_desativado = tk.StringVar(self, value="N")
         ttk.Combobox(g2, textvariable=self.var_desativado, values=ops_sn_obrig, width=6, state='readonly').grid(row=row2, column=5, sticky=tk.W, padx=3, pady=2)
+
+        ttk.Label(g2, text="Faixa RT (IBS/CBS):").grid(row=2, column=0, sticky=tk.W, padx=3, pady=2)
+        self.var_rt_faixa = tk.StringVar(self)
+        self.cmb_rt = ttk.Combobox(g2, textvariable=self.var_rt_faixa, values=self.opcoes_rt, width=48)
+        self.cmb_rt.grid(row=2, column=1, columnspan=5, sticky=tk.W, padx=3, pady=2)
 
         g3 = ttk.LabelFrame(f, text="Alíquotas e CSTs", padding="8")
         g3.pack(fill=tk.X, padx=5, pady=3)
@@ -352,9 +386,48 @@ class TelaCfop(ttk.Frame):
                          WHERE NAT_EMPRESA = ? AND NAT_FILIAL = ?
                          ORDER BY NAT_CODIGO"""
                 self.cfops_erp = fb.query(sql, [self.empresa, self.filial])
+                self._carregar_regras_rt(fb)
             self.parent.after(0, self._preencher_tree)
         except Exception as e:
             self.parent.after(0, lambda e=e: self.lbl_info.config(text=f"Erro ao carregar ERP: {e}"))
+            # reabilita os botões mesmo em falha (senão ficam travados até uma carga OK)
+            self.parent.after(0, lambda: (self.btn_salvar.config(state=tk.NORMAL),
+                                          self.btn_excluir.config(state=tk.NORMAL)))
+
+    def _carregar_regras_rt(self, fb):
+        """Carrega as regras de Reforma Tributária para o combo de faixa RT."""
+        self.regras_rt, self.opcoes_rt, self.rt_map, self.rt_id_to_opt = [], [], {}, {}
+        try:
+            rows = fb.query("SELECT TRT_ID, TRT_CLASS_TRIB_ID, TRT_CST, TRT_ALIQ_IBS_ESTADUAL, TRT_ALIQ_CBS "
+                            "FROM TABELA_RT_CONFIG_2025_2026 ORDER BY TRT_ID")
+        except Exception:
+            return
+        for r in rows:
+            rid = str(r.get('trt_id', '') or '').strip()
+            if not rid:
+                continue
+            rclass = str(r.get('trt_class_trib_id', '') or '').strip()
+            rcst = str(r.get('trt_cst', '') or '').strip()
+            ribs = r.get('trt_aliq_ibs_estadual') or 0
+            rcbs = r.get('trt_aliq_cbs') or 0
+            opt = f"{rid} - Class {rclass} - CST {rcst} - IBS {ribs}% - CBS {rcbs}%"
+            self.regras_rt.append(r)
+            self.opcoes_rt.append(opt)
+            self.rt_map[opt] = rid
+            self.rt_id_to_opt[rid] = opt
+
+    def _rt_id_from_opt(self, valor):
+        """Converte a opção escolhida no combo de RT no ID inteiro (TRT_ID) ou None."""
+        s = str(valor or '').strip()
+        if not s:
+            return None
+        if s in self.rt_map:
+            s = self.rt_map[s]
+        s = str(s).split(' - ')[0].strip()
+        try:
+            return int(s)
+        except ValueError:
+            return None
 
     def _preencher_tree(self):
         for item in self.tree.get_children():
@@ -385,6 +458,8 @@ class TelaCfop(ttk.Frame):
         self.atualizar_info()
         self.btn_salvar.config(state=tk.NORMAL)
         self.btn_excluir.config(state=tk.NORMAL)
+        if hasattr(self, 'cmb_rt'):
+            self.cmb_rt['values'] = self.opcoes_rt
 
     def _get_xml_qtd(self, base):
         if base in self.xml_cfop_data:
@@ -475,6 +550,10 @@ class TelaCfop(ttk.Frame):
         self.var_devolucao.set(str(cfop.get('nat_devolucao', '') or ''))
         self.var_compl_icms.set(str(cfop.get('nat_complemento_icms', '') or ''))
 
+        rt_val = cfop.get('nat_rt_2025_2026')
+        rt_s = '' if rt_val is None else str(int(rt_val))
+        self.var_rt_faixa.set(self.rt_id_to_opt.get(rt_s, rt_s))
+
         self._atualizar_codigo_completo()
 
     def _limpar_form(self):
@@ -504,6 +583,7 @@ class TelaCfop(ttk.Frame):
         self.var_pedido.set('N')
         self.var_devolucao.set('')
         self.var_compl_icms.set('')
+        self.var_rt_faixa.set('')
         self._atualizar_codigo_completo()
 
     def _novo_cfop(self):
@@ -567,9 +647,9 @@ class TelaCfop(ttk.Frame):
                     ("NAT_EMPRESA", int(self.empresa)),
                     ("NAT_FILIAL", int(self.filial)),
                     ("NAT_CODIGO", codigo),
-                    ("NAT_DESCRICAO_ABR", resumir_descricao(self.var_desc_abr.get().strip())),
-                    ("NAT_DESCRICAO_COMP", vazio_ou_nulo(resumir_descricao(self.var_desc_comp.get().strip(), 50))),
-                    ("NAT_OBSERVACAO", vazio_ou_nulo(self.var_obs.get().strip())),
+                    ("NAT_DESCRICAO_ABR", self.var_desc_abr.get().strip()[:30]),
+                    ("NAT_DESCRICAO_COMP", vazio_ou_nulo(self.var_desc_comp.get().strip()[:50])),
+                    ("NAT_OBSERVACAO", vazio_ou_nulo(self.var_obs.get().strip()[:50])),
                     ("NAT_ICMS", sn_ou_nulo(self.var_icms.get())),
                     ("NAT_PIS", sn_ou_nulo(self.var_pis_flag.get())),
                     ("NAT_COFINS", sn_ou_nulo(self.var_cofins_flag.get())),
@@ -614,6 +694,9 @@ class TelaCfop(ttk.Frame):
                     ("NAT_DEDUZIR_ICMS_BASE_PIS", 'N'),
                     ("NAT_DEDUZIR_ICMS_BASE_COFINS", 'N'),
                 ]
+                rt_cfop = self._rt_id_from_opt(self.var_rt_faixa.get())
+                if rt_cfop is not None:
+                    colunas_valores.append(("NAT_RT_2025_2026", rt_cfop))
                 self._upsert_cfop(colunas_valores)
                 self.parent.after(0, lambda: self._pos_salvar(codigo))
             except Exception as e:
@@ -684,7 +767,7 @@ class TelaCfop(ttk.Frame):
                 writer = csv.writer(f, delimiter=';')
                 writer.writerow(["CÓDIGO", "DESCRIÇÃO ABR", "DESCRIÇÃO COMP", "ICMS", "PIS", "COFINS",
                                  "ST", "IPI", "ESTOQUE", "FLUXO CAIXA", "LIVROS FISCAIS",
-                                 "CONTABILIDADE", "CUSTO", "PEDIDO", "DEVOLUÇÃO", "ATIVO"])
+                                 "CONTABILIDADE", "CUSTO", "PEDIDO", "DEVOLUÇÃO", "DESATIVADO"])
                 for c in self.cfops_erp:
                     writer.writerow([
                         c.get('nat_codigo', ''),
@@ -818,7 +901,7 @@ class TelaCfop(ttk.Frame):
                         ("NAT_EMPRESA", int(self.empresa)),
                         ("NAT_FILIAL", int(self.filial)),
                         ("NAT_CODIGO", codigo),
-                        ("NAT_DESCRICAO_ABR", desc),
+                        ("NAT_DESCRICAO_ABR", resumir_descricao(desc)),
                         ("NAT_DESCRICAO_COMP", resumir_descricao(desc, 50)),
                         ("NAT_ESTOQUE", 'S'),
                         ("NAT_FLUXO_CAIXA", 'S'),

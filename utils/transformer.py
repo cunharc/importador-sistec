@@ -96,16 +96,20 @@ class DataTransformer:
         if c_barra.upper() in ('SEM GTIN', 'SEMGTIN', '0', '', '00000000000000'):
             c_barra = None
 
-        unidade = str(xml_item.get('u_com') or '').strip().upper()[:6]
-        
+        unidade = str(xml_item.get('u_com') or '').strip().upper()
+        unidade_cv = unidade[:2]  # colunas PRODUTO_UNIDADE_* sao VARCHAR(2)
+
         emp = config.get('empresa', 1)
         fil = config.get('filial', 1)
         ano = date.today().year
         hoje_data = date.today().isoformat()
         hoje_hora = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000Z")
         
-        tipo_str = str(grupos.get('tipo', '4'))
-        tipo_id = int(tipo_str.split('-')[0].strip()) if '-' in tipo_str else 4
+        tipo_str = str(grupos.get('tipo', '4')).strip()
+        m_tipo = re.match(r'(\d+)', tipo_str)
+        tipo_id = int(m_tipo.group(1)) if m_tipo else 4
+        if tipo_id < 1 or tipo_id > 6:
+            tipo_id = 4
         
         # Regra do SPED baseada no Tipo
         sped_map = {1: '00', 2: '07', 3: '01', 4: '04', 5: '09', 6: '10'}
@@ -136,10 +140,10 @@ class DataTransformer:
             'PRODUTO_LESTOQUE_EMPRESA': emp,
             'PRODUTO_LESTOQUE_FILIAL': fil,
             'PRODUTO_LESTOQUE': None,
-            'PRODUTO_UNIDADE_CV': unidade,
+            'PRODUTO_UNIDADE_CV': unidade_cv,
             'PRODUTO_CONTEUDO_EMB': 1.0,
             'PRODUTO_MULTIPLO': 1.0,
-            'PRODUTO_UNIDADE_EST': unidade,
+            'PRODUTO_UNIDADE_EST': unidade_cv,
             'PRODUTO_ESTOQUE_MIN': None,
             'PRODUTO_ESTOQUE_MAX': None,
             'PRODUTO_PESO': 0.0,
@@ -165,7 +169,7 @@ class DataTransformer:
             'PRODUTO_CC_FILIAL': fil,
             'PRODUTO_CC': None,
             'PRODUTO_CERTIFICADO': 'N',
-            'PRODUTO_UN_EXP': unidade,
+            'PRODUTO_UN_EXP': unidade_cv,
             'PRODUTO_CBARRA': c_barra,
             'PRODUTO_DATA': hoje_data,
             'PRODUTO_DATA_ALT': hoje_data,
@@ -193,8 +197,8 @@ class DataTransformer:
     def prepare_tributacao_update(xml_item: Dict[str, Any], erp_match: Dict[str, Any], update_trib: bool) -> Dict[str, Any]:
         """Retorna o dicionário de campos para o SET do comando UPDATE do produto."""
         desc = str(xml_item.get('x_prod') or '').upper()[:50]
-        unidade = str(xml_item.get('u_com') or '').strip().upper()[:6]
-        
+        unidade = str(xml_item.get('u_com') or '').strip().upper()[:2]
+
         update_data = {
             'PRODUTO_DESCRICAO': desc,
             'PRODUTO_CLASS_FISCAL': re.sub(r'\D', '', str(xml_item.get('ncm') or '')),

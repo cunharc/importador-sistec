@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 import csv
 import os
 import sys
+from utils import tema
 
 class TelaPreview(tk.Toplevel):
     def __init__(self, parent, registros, callback_importar):
@@ -24,7 +25,8 @@ class TelaPreview(tk.Toplevel):
 
         self._criar_widgets()
         self._carregar_dados()
-        
+        tema.centralizar(self, w, h)
+
     def resource_path(self, relative_path):
         try:
             base_path = sys._MEIPASS
