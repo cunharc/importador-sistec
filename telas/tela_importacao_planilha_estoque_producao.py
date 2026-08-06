@@ -586,6 +586,14 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
         1.221 dos 3.540 itens das notas do FABENE ao produto errado. Um acerto
         exato em qualquer campo tem de vencer um acerto degradado em qualquer outro.
 
+        PRODUTO INATIVO NÃO CONCORRE. Inativar o gêmeo é justamente como o usuário
+        diz qual dos dois não usar — o sistema do cliente emite o mesmo código para
+        dois cadastros, ele inativa o que sobrou. Contando os dois, o CORACAO 3345
+        (10381 ativo, 20000 inativo) virava "AMBÍGUO (2 produtos)" e a inativação
+        não servia para nada. Só quando sobra mais de um ATIVO é que há ambiguidade
+        de verdade. Se todos estiverem inativos, ainda assim usa — achar o produto
+        inativo é melhor que mandar cadastrar uma terceira via do mesmo item.
+
         Retorna (info, campo_que_casou, codigos_ambiguos).
         """
         ordem = ['codigo', 'importacao', 'auxiliar'] if modo == 'auto' else [modo]
@@ -597,10 +605,18 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
                 achados = indices.get(campo, {}).get(chave)
                 if not achados:
                     continue
-                codigos = sorted({a['codigo'] for a in achados})
+                ativos = [a for a in achados if a.get('ativo') != 'N']
+                candidatos = ativos or achados
+                codigos = sorted({a['codigo'] for a in candidatos})
                 if len(codigos) > 1:
                     return None, campo, codigos
-                return achados[0], campo, None
+                escolhido = candidatos[0]
+                if len(achados) > len(candidatos):
+                    # deixa rastro de que houve gêmeo, para o motivo da grade poder dizer
+                    escolhido = dict(escolhido)
+                    escolhido['gemeos_inativos'] = sorted(
+                        {a['codigo'] for a in achados} - {escolhido['codigo']})
+                return escolhido, campo, None
         return None, None, None
 
     def _data_br(self, valor):

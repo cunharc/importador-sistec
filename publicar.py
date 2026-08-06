@@ -243,22 +243,25 @@ def atualizar_version_md(nova, data):
     with open(caminho, encoding='utf-8') as f:
         md = f.read()
 
-    # Quadro do topo: mantém a largura, senão as bordas │ desalinham
+    # Quadro do topo: a linha inteira tem de sair do mesmo tamanho E continuar
+    # terminando em │. Ajustar só o "resto" cortava o próprio │ quando a versão nova
+    # era mais longa (4.9 -> 4.9.1 deixava a linha sem borda).
     def trocar_quadro(m):
-        antes, versao, depois = m.group(1), m.group(2), m.group(3)
-        sobra = len(versao) - len(nova)
-        if sobra > 0:
-            depois = depois + ' ' * sobra
-        elif sobra < 0:
-            depois = depois[:sobra] or ' '
-        return f"{antes}{nova}{depois}"
+        linha, antes, versao, meio = m.group(0), m.group(1), m.group(2), m.group(3)
+        espacos = len(meio) + len(versao) - len(nova)
+        if espacos < 1:
+            espacos = 1               # nunca cola a versão na borda
+        return f"{antes}{nova}{' ' * espacos}│"
 
-    md = re.sub(r'(VERSÃO\s+)(\d+(?:\.\d+)*)(\s+│)', trocar_quadro, md, count=1)
+    md = re.sub(r'^(│\s*VERSÃO\s+)(\d+(?:\.\d+)*)( *)│$', trocar_quadro, md,
+                count=1, flags=re.M)
     md = re.sub(r'(Data:\s*)\d{2}/\d{2}/\d{4}', rf'\g<1>{data}', md, count=1)
 
-    # a que era "RELEASE ATUAL" deixa de ser, e a nova entra no lugar dela
+    # a que era "RELEASE ATUAL" deixa de ser, e a nova entra no lugar dela.
+    # `[ \t]*$` e não `\s*$`: com \s o final de linha era engolido e a seção
+    # rebaixada ficava colada na sua própria tabela.
     padrao = re.compile(r'^###\s*✅\s*VERSÃO\s+(\d+(?:\.\d+)*)\s*-\s*RELEASE ATUAL\s*'
-                        r'\(([^)]*)\)\s*$', re.M)
+                        r'\(([^)]*)\)[ \t]*$', re.M)
     m = padrao.search(md)
     nova_secao = (f"### ✅ VERSÃO {nova} - RELEASE ATUAL ({data})\n\n"
                   f"| Módulo                     | Status    | Descrição"

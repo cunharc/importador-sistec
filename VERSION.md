@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.9                             │
-│                   Data: 05/08/2026                          │
+│                      VERSÃO 4.10                            │
+│                   Data: 06/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.9 - RELEASE ATUAL (05/08/2026)
+### ✅ VERSÃO 4.10 - RELEASE ATUAL (06/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | **Natureza de operação que já existe é imutável.** `NAT_CODIGO` é o CFOP + 2 dígitos de variação (o CFOP 5101 aparece como `510101`, `510102`...), cada variação com as suas flags. A regra passou a ser: **existe variação que atenda exatamente** fluxo de caixa / contabilidade / estoque? **usa ela**. Não existe? **cadastra uma variação nova** (`510103`), e a grade lista as existentes com as flags de cada uma para você ver o porquê. O próximo sufixo é lido do banco no momento do cadastro, não da análise — entre analisar e cadastrar alguém pode ter criado uma variação no ERP |
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **A importação alterava natureza de operação existente.** O botão *⤓ Aplicar às naturezas desta análise* dava `UPDATE` em `NAT_FLUXO_CAIXA` / `NAT_CONTABILIDADE`, e o cadastro usava `UPDATE OR INSERT`: pedir fluxo de caixa `N` numa natureza que estava em `S` **reescrevia a natureza compartilhada**, mudando o comportamento de todas as notas que já tinham passado por ela e das outras rotinas do ERP. O botão foi **removido** e o cadastro virou `INSERT` puro |
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **Produto inativo concorria e criava ambiguidade falsa.** O CORACAO de `cProd` 3345 existe duas vezes no ERP (10381 ativo, 20000 **inativo**) e a fase 3 mostrava *AMBÍGUO (2 produtos)*, obrigando a resolver algo que já estava resolvido: inativar o gêmeo é justamente como se diz qual não usar. Agora **inativo não concorre** — só há ambiguidade quando sobra mais de um **ativo**, e nesse caso a grade mostra **quais** são os códigos em conflito em vez de só contar. Quando o gêmeo é descartado, a linha diz `OK (gêmeo inativo ignorado: 20000)`. Produto que só existe inativo continua sendo encontrado — melhor que mandar cadastrar uma terceira via do mesmo item |
+
+### ✅ VERSÃO 4.9 (05/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

@@ -306,10 +306,9 @@ class TelaImportacaoNFe(ttk.Frame):
         self.var_nat_contab = tk.BooleanVar(value=True)
         ttk.Checkbutton(linha2d, text="Contabilidade",
                         variable=self.var_nat_contab).pack(side=tk.LEFT, padx=(0, 10))
-        self.btn_flags_nat = ttk.Button(
-            linha2d, text="⤓ Aplicar às naturezas desta análise",
-            command=self._aplicar_flags_naturezas, state=tk.DISABLED)
-        self.btn_flags_nat.pack(side=tk.LEFT, padx=(6, 0))
+        tk.Label(linha2d, text="(natureza que já existe não é alterada: se nenhuma "
+                               "variação do CFOP atender, entra uma nova)",
+                 font=("Segoe UI", 8), fg="#555").pack(side=tk.LEFT, padx=(6, 0))
         tk.Label(linha2d, text="(estoque sempre N)", font=("Segoe UI", 8),
                  fg="#555").pack(side=tk.LEFT, padx=(6, 0))
 
@@ -461,59 +460,15 @@ class TelaImportacaoNFe(ttk.Frame):
                 'S' if self.var_nat_contab.get() else 'N',
                 'N')
 
-    def _aplicar_flags_naturezas(self):
-        """Grava fluxo de caixa / contabilidade nas naturezas usadas por esta análise.
-
-        Só nas que a análise realmente usa — não varre a tabela inteira: as naturezas
-        são compartilhadas por todos os clientes e a decisão é da importação da vez.
-        """
-        if not self.analise:
-            return messagebox.showwarning("Aviso", "Analise os XMLs primeiro.")
-        alvos = [f for f in self.analise['fase2'] if f.get('codigo_erp')]
-        if not alvos:
-            return messagebox.showinfo(
-                "Aviso", "Nenhuma natureza cadastrada nesta análise.\n\n"
-                         "Cadastre as naturezas faltantes primeiro (aba 2).")
-        fluxo, contab, _est = self._flags_nat()
-        n_s = sum(1 for f in alvos if f['tipo'] == 'S')
-        if not messagebox.askyesno(
-                "Confirmar",
-                f"Gravar nas {len(alvos)} natureza(s) desta análise "
-                f"({n_s} de saída, {len(alvos) - n_s} de entrada)?\n\n"
-                f"Fluxo de caixa = {fluxo}\n"
-                f"Contabilidade  = {contab}\n\n"
-                + ("Com fluxo de caixa = N as notas NÃO geram financeiro no ERP "
-                   "(nem pelo faturamento/CONFAT)."
-                   if fluxo == 'N' else
-                   "Com fluxo de caixa = S o faturamento do ERP gera o título "
-                   "das notas destas naturezas.")):
-            return
-        alterados, erros, log = 0, 0, []
-        try:
-            with FirebirdService(self.config_db) as fb:
-                for f in alvos:
-                    tab = ('TABELA_NAT_OPERACAO_SAIDA' if f['tipo'] == 'S'
-                           else 'TABELA_NAT_OPERACAO_ENTRADA')
-                    try:
-                        fb.execute(f"UPDATE {tab} SET NAT_FLUXO_CAIXA = ?, "
-                                   f"NAT_CONTABILIDADE = ? WHERE NAT_EMPRESA = ? "
-                                   f"AND NAT_FILIAL = ? AND NAT_CODIGO = ?",
-                                   [fluxo, contab, self.analise['emp'],
-                                    self.analise['fil'], f['codigo_erp']])
-                        f['fluxo'], f['contabil'] = fluxo, contab
-                        f['status'], f['tag'] = 'OK', 'OK'
-                        alterados += 1
-                        log.append(f"✅ CFOP {f['cfop']} -> natureza {f['codigo_erp']}: "
-                                   f"fluxo={fluxo} contabilidade={contab}")
-                    except Exception as e:
-                        erros += 1
-                        log.append(f"❌ natureza {f['codigo_erp']}: {e}")
-        except Exception as e:
-            return messagebox.showerror("Erro", f"Falha ao gravar:\n{e}")
-        self._renderizar(self.analise)
-        messagebox.showinfo("Concluído",
-                            f"{alterados} natureza(s) atualizada(s), {erros} erro(s).\n\n"
-                            f"Fluxo de caixa = {fluxo}, Contabilidade = {contab}.")
+    # _aplicar_flags_naturezas foi REMOVIDO de propósito.
+    #
+    # Ele dava UPDATE em NAT_FLUXO_CAIXA / NAT_CONTABILIDADE de naturezas que já
+    # existiam no ERP. Natureza cadastrada é imutável: as notas antigas e outras
+    # rotinas do ERP dependem das flags que ela tem. Mudar a natureza para atender
+    # esta importação mudava o comportamento de tudo que já passou por ela.
+    #
+    # No lugar disso, a fase 2 procura uma VARIAÇÃO do CFOP que atenda (NAT_CODIGO é
+    # CFOP + 2 dígitos: 510101, 510102...) e, não achando, cadastra uma variação nova.
         self._oferecer_log(log, "LOG_FLAGS_NATUREZAS.txt")
 
     # ------------------------------------------------- ESCOPO (saída × entrada)
@@ -767,6 +722,9 @@ class TelaImportacaoNFe(ttk.Frame):
         # empresa/filial lidos aqui, na thread da UI — a thread de análise não
         # pode tocar em widget (some se a tela for fechada no meio).
         emp, fil = self._emp_fil()
+        # as flags desejadas também: é por elas que a fase 2 decide se alguma
+        # variação do CFOP serve ou se é preciso cadastrar uma nova
+        self._flags_desejadas = self._flags_nat()
         threading.Thread(target=self._analisar_bg, args=(pasta, cnpj, emp, fil),
                          daemon=True).start()
 
@@ -935,38 +893,54 @@ class TelaImportacaoNFe(ttk.Frame):
                     continue
                 reg = cfops.setdefault((tipo, cf), {'notas': set(), 'desc': n.get('nat_op', '')})
                 reg['notas'].add(n['chave'])
+        # NAT_CODIGO é o CFOP + 2 dígitos de variação: o CFOP 5101 aparece como
+        # 510101, 510102... cada variação com as suas flags. Natureza já cadastrada
+        # é IMUTÁVEL — outras rotinas do ERP e as notas antigas dependem dela. Então
+        # a regra é: existe variação que atenda exatamente? usa. Não existe? cadastra
+        # uma variação NOVA. Nunca altera a que está lá.
+        fluxo_q, contab_q, estoq_q = getattr(self, '_flags_desejadas', ('S', 'S', 'N'))
         fase2 = []
         for (tipo, cf), reg in sorted(cfops.items()):
             nats = dados['nat_saida'] if tipo == 'S' else dados['nat_entrada']
-            # o ERP usa natureza com sufixo (ex.: 6923 -> 692301); casa pelo prefixo
-            achou, cod_erp = None, None
-            if cf in nats:
-                achou, cod_erp = nats[cf], cf
+            variacoes = sorted((cod, r) for cod, r in nats.items()
+                               if cod == cf or cod.startswith(cf))
+
+            def flags_de(r):
+                return (str(r.get('nat_fluxo_caixa') or '').strip().upper(),
+                        str(r.get('nat_contabilidade') or '').strip().upper(),
+                        str(r.get('nat_estoque') or '').strip().upper())
+
+            perfeita = next((c for c, r in variacoes
+                             if flags_de(r) == (fluxo_q, contab_q, estoq_q)), None)
+
+            if perfeita:
+                achou = dict(variacoes)[perfeita]
+                cod_erp = perfeita
+                fluxo, contab, estoq = flags_de(achou)
+                desc_erp = str(achou.get('nat_descricao_abr') or '').strip()
+                status = 'OK' if len(variacoes) == 1 else f'OK (variação {perfeita})'
+                tag = 'OK'
+            elif variacoes:
+                # tem o CFOP, mas nenhuma variação com estas flags
+                cod_erp, achou = None, None
+                fluxo = contab = estoq = '—'
+                desc_erp = ' / '.join(
+                    f"{c}: fluxo={flags_de(r)[0] or '—'} contab={flags_de(r)[1] or '—'} "
+                    f"estoq={flags_de(r)[2] or '—'}" for c, r in variacoes)
+                status = (f'CADASTRAR VARIAÇÃO — as {len(variacoes)} existentes não têm '
+                          f'fluxo={fluxo_q} contab={contab_q} estoq={estoq_q}')
+                tag = 'ERRO'
             else:
-                for cod, r in nats.items():
-                    if cod.startswith(cf):
-                        achou, cod_erp = r, cod
-                        break
-            if achou is None:
+                cod_erp, achou = None, None
                 status, tag = 'NÃO CADASTRADO', 'ERRO'
                 fluxo = contab = estoq = '—'
                 desc_erp = ''
-            else:
-                fluxo = str(achou.get('nat_fluxo_caixa') or '').strip() or '—'
-                contab = str(achou.get('nat_contabilidade') or '').strip() or '—'
-                estoq = str(achou.get('nat_estoque') or '').strip() or '—'
-                desc_erp = str(achou.get('nat_descricao_abr') or '').strip()
-                faltando = [r for r, v in (('fluxo de caixa', fluxo),
-                                           ('contabilidade', contab)) if v == '—']
-                if faltando:
-                    status = 'INCOMPLETO (sem ' + ' e sem '.join(faltando) + ')'
-                    tag = 'AVISO'
-                else:
-                    status, tag = 'OK', 'OK'
+
             fase2.append({
                 'tipo': tipo, 'cfop': cf, 'codigo_erp': cod_erp, 'desc_erp': desc_erp,
                 'desc_xml': reg['desc'], 'fluxo': fluxo, 'contabil': contab,
                 'estoque': estoq, 'notas': len(reg['notas']),
+                'variacoes': [c for c, _ in variacoes],
                 'status': status, 'tag': tag,
             })
 
@@ -985,9 +959,17 @@ class TelaImportacaoNFe(ttk.Frame):
         for cod, reg in sorted(prods.items(), key=lambda kv: -kv[1]['qtde']):
             info, campo, ambiguos = self._resolver_produto(cod, indices, 'auto')
             if ambiguos:
-                status, tag = f'AMBÍGUO ({len(ambiguos)} produtos)', 'ERRO'
+                # só chega aqui com mais de um produto ATIVO; gêmeo inativo o
+                # resolvedor já descarta. Mostrar os códigos evita ter de ir
+                # garimpar no ERP qual é o par em conflito.
+                status = f'AMBÍGUO ({len(ambiguos)}: {", ".join(map(str, ambiguos))})'
+                tag = 'ERRO'
             elif info is None:
                 status, tag = 'NÃO ENCONTRADO', 'ERRO'
+            elif info.get('gemeos_inativos'):
+                status = ('OK (gêmeo inativo ignorado: '
+                          + ', '.join(map(str, info['gemeos_inativos'])) + ')')
+                tag = 'OK'
             else:
                 status, tag = 'OK', 'OK'
             fase3.append({
@@ -1143,7 +1125,6 @@ class TelaImportacaoNFe(ttk.Frame):
         self.btn_analisar.config(state=tk.NORMAL)
         self.btn_cadastrar.config(state=tk.NORMAL)
         self.btn_exportar.config(state=tk.NORMAL)
-        self.btn_flags_nat.config(state=tk.NORMAL)
         # a grade nasce marcada só no escopo escolhido — o que está marcado é
         # exatamente o que vai ser gravado nesta passada
         self._marcar_pelo_escopo()
@@ -1367,19 +1348,23 @@ class TelaImportacaoNFe(ttk.Frame):
         pend = [f for f in self.analise['fase2'] if f['tag'] == 'ERRO']
         if not pend:
             return messagebox.showinfo(
-                "Aviso", "Nenhuma natureza de operação faltando.\n\n"
-                         "As marcadas como INCOMPLETO existem no ERP mas estão sem fluxo de caixa\n"
-                         "ou sem contabilidade — ajuste na tela de CFOP, que tem o formulário completo.")
+                "Aviso", "Toda natureza de operação usada por estas notas já tem uma "
+                         "variação com as flags escolhidas.")
         fluxo, contab, estoq = self._flags_nat()
+        novas = sum(1 for f in pend if not f.get('variacoes'))
+        variantes = len(pend) - novas
         if not messagebox.askyesno(
                 "Confirmar",
                 f"Cadastrar {len(pend)} natureza(s) de operação?\n\n"
-                f"Fluxo de caixa = {fluxo}\n"
+                + (f"• {novas} CFOP(s) que não existem no ERP\n" if novas else "")
+                + (f"• {variantes} CFOP(s) que existem, mas sem variação com estas "
+                   f"flags — entra uma variação NOVA\n" if variantes else "")
+                + f"\nFluxo de caixa = {fluxo}\n"
                 f"Contabilidade  = {contab}\n"
                 f"Estoque        = {estoq}  (a importação não movimenta estoque)\n\n"
                 + ("Com fluxo de caixa = N as notas NÃO geram financeiro no ERP.\n\n"
                    if fluxo == 'N' else "")
-                + "Ajustes finos podem ser feitos depois na tela de CFOP."):
+                + "Nenhuma natureza existente é alterada."):
             return
         emp, fil = self.analise['emp'], self.analise['fil']
         criados, erros, log = 0, 0, []
@@ -1388,24 +1373,42 @@ class TelaImportacaoNFe(ttk.Frame):
                 for f in pend:
                     tab = ('TABELA_NAT_OPERACAO_SAIDA' if f['tipo'] == 'S'
                            else 'TABELA_NAT_OPERACAO_ENTRADA')
-                    # o ERP usa código com sufixo de 2 dígitos (6923 -> 692301)
-                    codigo = f"{f['cfop']}01"
-                    desc = (f['desc_xml'] or f"CFOP {f['cfop']}")[:30]
                     try:
+                        # o próximo sufixo livre: 5101 com 510101 e 510102 -> 510103.
+                        # Relê do banco em vez de confiar na análise: entre analisar e
+                        # cadastrar alguém pode ter criado uma variação no ERP.
+                        usados = {str(r['nat_codigo']).strip() for r in fb.query(
+                            f"SELECT NAT_CODIGO FROM {tab} WHERE NAT_EMPRESA = ? "
+                            f"AND NAT_FILIAL = ? AND NAT_CODIGO STARTING WITH ?",
+                            [emp, fil, f['cfop']])}
+                        codigo = next((f"{f['cfop']}{i:02d}" for i in range(1, 100)
+                                       if f"{f['cfop']}{i:02d}" not in usados), None)
+                        if not codigo:
+                            raise RuntimeError(
+                                f"as 99 variações do CFOP {f['cfop']} já existem")
+                        desc = (f['desc_xml'] or f"CFOP {f['cfop']}")[:30]
+                        # INSERT puro, sem UPDATE OR INSERT: natureza que já existe é
+                        # imutável, outras rotinas e as notas antigas dependem dela.
                         fb.execute(f"""
-                            UPDATE OR INSERT INTO {tab} (
+                            INSERT INTO {tab} (
                                 NAT_EMPRESA, NAT_FILIAL, NAT_CODIGO, NAT_DESCRICAO_ABR,
                                 NAT_DESCRICAO_COMP, NAT_FLUXO_CAIXA, NAT_CONTABILIDADE,
                                 NAT_ESTOQUE, NAT_DESATIVADO
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'N')
-                            MATCHING (NAT_EMPRESA, NAT_FILIAL, NAT_CODIGO)
                         """, [emp, fil, codigo, desc, (f['desc_xml'] or desc)[:50],
                               fluxo, contab, estoq])
                         f['codigo_erp'] = codigo
-                        f['status'], f['tag'] = 'OK', 'OK'
+                        f['status'] = ('OK' if not f.get('variacoes')
+                                       else f'OK (variação {codigo})')
+                        f['tag'] = 'OK'
                         f['fluxo'], f['contabil'], f['estoque'] = fluxo, contab, estoq
-                        log.append(f"✅ CFOP {f['cfop']} -> natureza {codigo} ({desc}) "
-                                   f"fluxo={fluxo} contabilidade={contab}")
+                        anteriores = f.get('variacoes') or []
+                        f['variacoes'] = sorted(anteriores + [codigo])
+                        log.append(
+                            f"✅ CFOP {f['cfop']} -> natureza {codigo} ({desc}) "
+                            f"fluxo={fluxo} contabilidade={contab} estoque={estoq}"
+                            + (f" [conviva com {', '.join(anteriores)}, não alterada(s)]"
+                               if anteriores else ""))
                         criados += 1
                     except Exception as e:
                         erros += 1
