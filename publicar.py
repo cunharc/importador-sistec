@@ -44,6 +44,15 @@ import urllib.error
 import urllib.request
 import zipfile
 
+# O console do Windows abre em cp1252 e todo print daqui tem ✔ / ✅ / ⚠. Sem isto
+# o script morria de UnicodeEncodeError NO PRINT — depois de já ter escrito o
+# version.py, deixando versão nova no arquivo e VERSION.md na versão antiga.
+for _fluxo in (sys.stdout, sys.stderr):
+    try:
+        _fluxo.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from version import VERSAO, DATA_VERSAO          # noqa: E402
 from utils.updater import GITHUB_REPO, NOME_EXE  # noqa: E402

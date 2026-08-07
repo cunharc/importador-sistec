@@ -6,7 +6,7 @@ import os
 import sys
 import logging
 
-from utils.xml_reader import parse_nfe_folder, parse_nfe
+from utils.xml_reader import parse_nfe_folder, parse_nfe, pct_st as _pct_st
 from utils import tema
 
 
@@ -165,9 +165,11 @@ class TelaAuditoriaPorProduto(ttk.Frame):
         frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
+        # % MVA ST e % ICMS ST vêm do pMVAST/pICMSST do XML e ficam junto ao bloco
+        # de ICMS: é lá que se lê a tributação da substituição.
         self.colunas = (
             "QTD", "CÓD PRODUTO", "DESCRIÇÃO PRODUTO", "EAN", "NCM", "CFOP", "UF DEST", "TIPO CLI",
-            "CST ICMS", "% ICMS", "% RED.BC", "CBENEF",
+            "CST ICMS", "% ICMS", "% RED.BC", "% MVA ST", "% ICMS ST", "CBENEF",
             "CST PIS", "% PIS", "CST COF", "% COF",
             "CLASSE RT", "CST RT", "% IBS", "% CBS"
         )
@@ -178,7 +180,7 @@ class TelaAuditoriaPorProduto(ttk.Frame):
         self.tree.bind("<Double-1>", self._abrir_detalhes)
 
         larguras = [40, 100, 200, 110, 80, 50, 60, 70,
-                    70, 60, 60, 80,
+                    70, 60, 60, 75, 80, 80,
                     60, 50, 60, 50,
                     90, 60, 50, 50]
         
@@ -260,6 +262,8 @@ class TelaAuditoriaPorProduto(ttk.Frame):
                 str(i.get('icms_cst', '')),
                 str(i.get('p_icms', 0)),
                 str(i.get('p_red_bc', 0)),
+                str(i.get('p_mvast', 0) or 0),
+                str(i.get('p_icmsst', 0) or 0),
                 str(i.get('c_benef', '')),
                 str(i.get('pis_cst', '')),
                 str(i.get('p_pis', 0)),
@@ -291,15 +295,17 @@ class TelaAuditoriaPorProduto(ttk.Frame):
                 chave_tupla[6], # CST ICMS
                 chave_tupla[7], # % ICMS
                 chave_tupla[8], # % RED.BC
-                chave_tupla[9], # CBENEF
-                str(chave_tupla[10]).zfill(2) if chave_tupla[10] else '', # CST PIS
-                chave_tupla[11], # % PIS
-                str(chave_tupla[12]).zfill(2) if chave_tupla[12] else '', # CST COF
-                chave_tupla[13], # % COF
-                chave_tupla[14], # CLASSE RT
-                chave_tupla[15], # CST RT
-                chave_tupla[16], # % IBS
-                chave_tupla[17], # % CBS
+                _pct_st(chave_tupla[9]),  # % MVA ST
+                _pct_st(chave_tupla[10]), # % ICMS ST
+                chave_tupla[11], # CBENEF
+                str(chave_tupla[12]).zfill(2) if chave_tupla[12] else '', # CST PIS
+                chave_tupla[13], # % PIS
+                str(chave_tupla[14]).zfill(2) if chave_tupla[14] else '', # CST COF
+                chave_tupla[15], # % COF
+                chave_tupla[16], # CLASSE RT
+                chave_tupla[17], # CST RT
+                chave_tupla[18], # % IBS
+                chave_tupla[19], # % CBS
                 grupo_itens
             )
             linhas.append(val)

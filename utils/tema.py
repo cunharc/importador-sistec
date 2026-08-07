@@ -331,13 +331,31 @@ class BarraFluida(ttk.LabelFrame):
             f.grid(row=i // por_linha, column=i % por_linha,
                    padx=(0, 12), pady=2, sticky=tk.W)
 
+    _GAP = 12          # o padx entre células, igual ao usado no _dispor
+
+    def _largura_com(self, por_linha):
+        """Largura que o grid ocuparia com esta quantidade de colunas.
+
+        No grid do Tk cada coluna assume a largura do seu MAIOR ocupante — não a
+        do maior grupo da barra inteira. Somar coluna a coluna é o cálculo exato;
+        dimensionar tudo pelo grupo mais largo (o que este código fazia antes)
+        superestimava a largura e quebrava a barra em linhas que cabiam. Numa
+        barra com um controle largo e cinco estreitos, isso custava duas linhas
+        a mais mesmo em monitor de 1920.
+        """
+        larguras = [f.winfo_reqwidth() for f in self._grupos]
+        colunas = [max(larguras[c::por_linha]) for c in range(min(por_linha, len(larguras)))]
+        return sum(colunas) + self._GAP * len(colunas)
+
     def _on_configure(self, event):
         if not self._grupos:
             return
-        # A coluna do grid assume a largura do grupo mais largo, então dimensionar
-        # por ele garante que nenhum grupo fique cortado.
-        maior = max(f.winfo_reqwidth() for f in self._grupos) + 14
-        self._dispor(max(1, event.width // maior))
+        # a maior quantidade de colunas que ainda cabe; 1 é o piso
+        cabe = 1
+        for n in range(1, len(self._grupos) + 1):
+            if self._largura_com(n) <= event.width:
+                cabe = n
+        self._dispor(cabe)
 
 
 def rotulo_campo(parent, texto):

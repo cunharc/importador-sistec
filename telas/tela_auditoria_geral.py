@@ -8,7 +8,7 @@ import json
 import logging
 import glob
 
-from utils.xml_reader import parse_nfe
+from utils.xml_reader import parse_nfe, pct_st as _pct_st
 from utils import tema
 
 
@@ -267,10 +267,12 @@ class TelaAuditoriaGeral(ttk.Frame):
         frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=5)
 
+        # % MVA ST e % ICMS ST saem do pMVAST/pICMSST do XML e entram no bloco de
+        # ICMS, junto do que define a tributação da substituição.
         self.colunas = (
             "QTD", "CÓD. PROD", "DESCRIÇÃO", "EAN", "UNID", "NCM", "DESCRIÇÃO NCM", "DESCR CONCAT NCM",
             "CFOP", "UF DEST", "TIPO CLI",
-            "CST ICMS", "% ICMS", "% RED.BC", "CBENEF",
+            "CST ICMS", "% ICMS", "% RED.BC", "% MVA ST", "% ICMS ST", "CBENEF",
             "CST PIS", "% PIS", "CST COF", "% COF",
             "CLASSE RT", "CST RT", "% IBS", "% CBS"
         )
@@ -281,7 +283,7 @@ class TelaAuditoriaGeral(ttk.Frame):
         self.tree.bind("<Double-1>", self._abrir_detalhes)
 
         larguras = [40, 90, 200, 110, 50, 80, 200, 200, 50, 60, 70,
-                    70, 60, 60, 80,
+                    70, 60, 60, 75, 80, 80,
                     60, 50, 60, 50,
                     90, 60, 50, 50]
         
@@ -461,7 +463,10 @@ class TelaAuditoriaGeral(ttk.Frame):
             if grp_uf: chave.append(str(i.get('uf_dest', '')))
             if grp_tipo_cli: chave.append(str(i.get('tipo_cliente', 'CT')))
             if grp_icms:
-                chave.extend([str(i.get('icms_cst', '')), str(i.get('p_icms', 0)), str(i.get('p_red_bc', 0)), str(i.get('c_benef', ''))])
+                chave.extend([str(i.get('icms_cst', '')), str(i.get('p_icms', 0)),
+                              str(i.get('p_red_bc', 0)),
+                              str(i.get('p_mvast', 0) or 0), str(i.get('p_icmsst', 0) or 0),
+                              str(i.get('c_benef', ''))])
             if grp_piscof:
                 chave.extend([str(i.get('pis_cst', '')), str(i.get('p_pis', 0)), str(i.get('cofins_cst', '')), str(i.get('p_cofins', 0))])
             if grp_rt:
@@ -499,6 +504,10 @@ class TelaAuditoriaGeral(ttk.Frame):
             icms_csts = [i.get('icms_cst', '') for i in grupo_itens]
             p_icms = [i.get('p_icms', 0) for i in grupo_itens]
             p_reds = [i.get('p_red_bc', 0) for i in grupo_itens]
+            # já formatados: zero vira '' e o _get_distinct devolve '-', do jeito
+            # que as outras colunas sem valor aparecem nesta tela
+            p_mvast = [_pct_st(i.get('p_mvast')) for i in grupo_itens]
+            p_icmsst = [_pct_st(i.get('p_icmsst')) for i in grupo_itens]
             cbenefs = [i.get('c_benef', '') for i in grupo_itens]
             
             pis_csts = [str(i.get('pis_cst', '')).zfill(2) if i.get('pis_cst') else '' for i in grupo_itens]
@@ -515,7 +524,8 @@ class TelaAuditoriaGeral(ttk.Frame):
                 qtd, self._get_distinct(cod_prods), self._get_distinct(desc_prods), self._get_distinct(eans), self._get_distinct(unidades), self._get_distinct(ncms),
                 self._get_distinct(desc_ncms), self._get_distinct(desc_concat_ncms),
                 self._get_distinct(cfops), self._get_distinct(ufs), self._get_distinct(tipos),
-                self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds), self._get_distinct(cbenefs),
+                self._get_distinct(icms_csts), self._get_distinct(p_icms), self._get_distinct(p_reds),
+                self._get_distinct(p_mvast), self._get_distinct(p_icmsst), self._get_distinct(cbenefs),
                 self._get_distinct(pis_csts), self._get_distinct(p_pis), self._get_distinct(cof_csts), self._get_distinct(p_cof),
                 self._get_distinct(c_class), self._get_distinct(cst_rt), self._get_distinct(p_ibs), self._get_distinct(p_cbs),
                 grupo_itens

@@ -9,6 +9,21 @@ from utils import multivalor
 
 _log = get_logger('xml_reader')
 
+
+def pct_st(v):
+    """Percentual de ST (pMVAST / pICMSST) para exibição: vazio quando não há.
+
+    MVA e ICMS ST só existem em operação com substituição tributária. Mostrar
+    '0.0' em todas as outras enche a coluna de ruído e esconde justamente as
+    linhas que interessam; em branco, as que têm ST saltam à vista.
+    """
+    try:
+        n = float(str(v).replace(',', '.'))
+    except (TypeError, ValueError):
+        return ''
+    return '' if n == 0 else f"{n:g}"
+
+
 def _get(element: ET.Element, tag: str) -> Optional[str]:
     """Tenta buscar a tag com e sem o namespace padrão da NF-e."""
     if element is None:

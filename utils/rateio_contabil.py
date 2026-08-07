@@ -69,8 +69,16 @@ def codigo_do_rotulo(texto):
 
 
 def rateio_receber(cur, emp, fil, cod, serie, cliente, emissao, valor,
-                   cc=None, conta=None, exercicio=None, reduzidos=None):
-    """Rateio do título no Contas a Receber. No-op quando cc e conta são None."""
+                   cc=None, conta=None, exercicio=None, reduzidos=None,
+                   emp_cad=None, fil_cad=None):
+    """Rateio do título no Contas a Receber. No-op quando cc e conta são None.
+
+    (emp, fil) é a filial do TÍTULO; (emp_cad, fil_cad) é a dos CADASTROS que ele
+    aponta — cliente, centro de custo, plano de contas, histórico. Em branco caem
+    na mesma, que é o caso de quem tem tudo numa filial só.
+    """
+    empc = emp if emp_cad is None else emp_cad
+    filc = fil if fil_cad is None else fil_cad
     if cc:
         cur.execute("""
             INSERT INTO TABELA_TITULO_CC_REC (
@@ -79,7 +87,7 @@ def rateio_receber(cur, emp, fil, cod, serie, cliente, emissao, valor,
                 TCC_CC_EMPRESA, TCC_CC_FILIAL, TCC_CC,
                 TCC_PORCENTAGEM, TCC_VALOR
             ) VALUES (?,?,?,?,1, ?,?,?, ?,?,?, 100, ?)
-        """, [emp, fil, cod, serie, emp, fil, cliente, emp, fil, cc,
+        """, [emp, fil, cod, serie, empc, filc, cliente, empc, filc, cc,
               float(valor or 0.0)])
     if conta and exercicio:
         cur.execute("""
@@ -91,14 +99,20 @@ def rateio_receber(cur, emp, fil, cod, serie, cliente, emissao, valor,
                 TCONT_VALOR, TCONT_PORCENTAGEM,
                 TCONT_HISTORICO_EMPRESA, TCONT_HISTORICO_FILIAL, TCONT_EMISSAO
             ) VALUES (?,?,?,?,1, ?,?,?, ?,?,?, ?,?, ?,100, ?,?,?)
-        """, [emp, fil, cod, serie, emp, fil, cliente,
-              emp, fil, exercicio, conta, (reduzidos or {}).get(conta),
-              float(valor or 0.0), emp, fil, emissao])
+        """, [emp, fil, cod, serie, empc, filc, cliente,
+              empc, filc, exercicio, conta, (reduzidos or {}).get(conta),
+              float(valor or 0.0), empc, filc, emissao])
 
 
 def rateio_pagar(cur, emp, fil, cod, serie, fornecedor, emissao, valor,
-                 cc=None, conta=None, exercicio=None, reduzidos=None):
-    """Rateio do título no Contas a Pagar. No-op quando cc e conta são None."""
+                 cc=None, conta=None, exercicio=None, reduzidos=None,
+                 emp_cad=None, fil_cad=None):
+    """Rateio do título no Contas a Pagar. No-op quando cc e conta são None.
+
+    Mesma separação do rateio_receber: título numa filial, cadastros noutra.
+    """
+    empc = emp if emp_cad is None else emp_cad
+    filc = fil if fil_cad is None else fil_cad
     if cc:
         cur.execute("""
             INSERT INTO TABELA_TITULO_CC (
@@ -108,7 +122,7 @@ def rateio_pagar(cur, emp, fil, cod, serie, fornecedor, emissao, valor,
                 TCC_LANCAMENTO, TCC_SERIE, TCC_EMISSAO,
                 TCC_PORCENTAGEM, TCC_VALOR
             ) VALUES (?,?,?, ?,?,?, ?,?,?, 1,?,?, 100, ?)
-        """, [emp, fil, cod, emp, fil, fornecedor, emp, fil, cc,
+        """, [emp, fil, cod, empc, filc, fornecedor, empc, filc, cc,
               serie, emissao, float(valor or 0.0)])
     if conta and exercicio:
         cur.execute("""
@@ -120,6 +134,6 @@ def rateio_pagar(cur, emp, fil, cod, serie, fornecedor, emissao, valor,
                 TCONT_PORCENTAGEM, TCONT_VALOR,
                 TCONT_HISTORICO_EMPRESA, TCONT_HISTORICO_FILIAL
             ) VALUES (?,?,?,?,1, ?,?,?, ?,?,?, ?,?,?, 100,?, ?,?)
-        """, [emp, fil, cod, serie, emp, fil, fornecedor,
-              emp, fil, exercicio, conta, (reduzidos or {}).get(conta),
-              emissao, float(valor or 0.0), emp, fil])
+        """, [emp, fil, cod, serie, empc, filc, fornecedor,
+              empc, filc, exercicio, conta, (reduzidos or {}).get(conta),
+              emissao, float(valor or 0.0), empc, filc])

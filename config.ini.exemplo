@@ -204,8 +204,16 @@ ultima_pasta =
 ; CNPJ da empresa que emitiu os XMLs — é ele que separa nota própria de terceiros.
 ; O cadastro da filial no ERP tem a palavra final sobre este valor.
 cnpj_empresa =
+; Empresa/filial em que a NOTA é gravada.
 empresa = 1
 filial = 1
+; Empresa/filial em que estão os CADASTROS que a nota aponta — cliente/fornecedor,
+; produto e natureza de operação. Serve para quem mantém tudo numa filial só e faz
+; as demais olharem para lá por configuração do ERP: a nota entra na filial 2 e o
+; cliente e o produto continuam a ser lidos (e cadastrados) na 1. Em branco, seguem
+; a filial da nota.
+empresa_cadastros = 1
+filial_cadastros = 1
 gerar_financeiro = S
 ; NAT_FLUXO_CAIXA e NAT_CONTABILIDADE das naturezas usadas na importação. Com fluxo
 ; de caixa em S, o faturamento do ERP (CONFAT) gera o título ao passar pela nota —

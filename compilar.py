@@ -1,6 +1,16 @@
 import PyInstaller.__main__
 import shutil
 import os
+import sys
+
+# O console do Windows abre em cp1252 e os avisos daqui têm ✅. Sem isto o script
+# morria de UnicodeEncodeError NO PRINT FINAL, depois de o .exe já estar pronto —
+# e o publicar.py, que confere o código de saída, dava "a compilação falhou".
+for _fluxo in (sys.stdout, sys.stderr):
+    try:
+        _fluxo.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
 
 PyInstaller.__main__.run([
     'main.py',

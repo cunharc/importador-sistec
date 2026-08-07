@@ -231,6 +231,29 @@ class TelaImportacaoNFe(ttk.Frame):
         self.lbl_filial = tk.Label(linha2, text="", font=("Segoe UI", 8), fg="#555")
         self.lbl_filial.pack(side=tk.LEFT, padx=(4, 0))
 
+        # A NOTA entra numa filial; os CADASTROS que ela aponta podem estar em
+        # outra. É o caso de quem mantém cliente, produto e natureza numa filial
+        # só e faz as demais olharem para lá por configuração do ERP. Sem esta
+        # separação, importar na filial 2 procurava cliente e produto na 2 (onde
+        # não há nada) e não achava nada.
+        linha2a = ttk.Frame(content)
+        linha2a.pack(fill=tk.X, pady=2)
+        tk.Label(linha2a, text="Cadastros (cliente / produto / natureza) na Empresa:",
+                 font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.ent_empresa_cad = ttk.Entry(linha2a, width=5, font=("Segoe UI", 9))
+        self.ent_empresa_cad.insert(0, "1")
+        self.ent_empresa_cad.pack(side=tk.LEFT, padx=2)
+        tk.Label(linha2a, text="Filial:", font=("Segoe UI", 9, "bold")).pack(
+            side=tk.LEFT, padx=(8, 2))
+        self.ent_filial_cad = ttk.Entry(linha2a, width=5, font=("Segoe UI", 9))
+        self.ent_filial_cad.insert(0, "1")
+        self.ent_filial_cad.pack(side=tk.LEFT, padx=2)
+        for ent in (self.ent_empresa_cad, self.ent_filial_cad):
+            ent.bind("<FocusOut>", lambda e: self._atualizar_aviso_cadastros())
+            ent.bind("<Return>", lambda e: self._atualizar_aviso_cadastros())
+        self.lbl_cad = tk.Label(linha2a, text="", font=("Segoe UI", 8), fg="#555")
+        self.lbl_cad.pack(side=tk.LEFT, padx=(8, 0))
+
         self.var_gerar_fin = tk.BooleanVar(value=True)
         ttk.Checkbutton(linha2, text="Gerar financeiro (parcelas + título)",
                         variable=self.var_gerar_fin,
@@ -391,8 +414,14 @@ class TelaImportacaoNFe(ttk.Frame):
                 self.ent_pasta.insert(0, pasta)
             self.ent_cnpj.delete(0, tk.END)
             self.ent_cnpj.insert(0, self.config.get(s, 'cnpj_empresa', fallback=''))
-            for ent, chave, padrao in ((self.ent_empresa, 'empresa', '1'),
-                                       (self.ent_filial, 'filial', '1')):
+            for ent, chave, padrao in (
+                    (self.ent_empresa, 'empresa', '1'),
+                    (self.ent_filial, 'filial', '1'),
+                    # sem chave salva, os cadastros ficam na mesma da nota
+                    (self.ent_empresa_cad, 'empresa_cadastros',
+                     self.config.get(s, 'empresa', fallback='1')),
+                    (self.ent_filial_cad, 'filial_cadastros',
+                     self.config.get(s, 'filial', fallback='1'))):
                 ent.delete(0, tk.END)
                 ent.insert(0, self.config.get(s, chave, fallback=padrao))
             self.var_gerar_fin.set(
@@ -415,6 +444,7 @@ class TelaImportacaoNFe(ttk.Frame):
             self._carregar_rateio_do_escopo()
         self._carregar_combos_erp()
         self._atualizar_dica_escopo()
+        self._atualizar_aviso_cadastros()
         # O CNPJ é do cadastro da filial e o banco tem a palavra final: se o
         # config.ini guardasse um CNPJ de outra base (trocar de banco é comum
         # na implantação), a análise marcaria todas as notas como de terceiros.
@@ -429,6 +459,8 @@ class TelaImportacaoNFe(ttk.Frame):
         self.config.set(s, 'cnpj_empresa', self.ent_cnpj.get().strip())
         self.config.set(s, 'empresa', self.ent_empresa.get().strip())
         self.config.set(s, 'filial', self.ent_filial.get().strip())
+        self.config.set(s, 'empresa_cadastros', self.ent_empresa_cad.get().strip())
+        self.config.set(s, 'filial_cadastros', self.ent_filial_cad.get().strip())
         self.config.set(s, 'gerar_financeiro', 'S' if self.var_gerar_fin.get() else 'N')
         self.config.set(s, 'nat_fluxo_caixa', 'S' if self.var_nat_fluxo.get() else 'N')
         self.config.set(s, 'nat_contabilidade', 'S' if self.var_nat_contab.get() else 'N')
@@ -592,6 +624,7 @@ class TelaImportacaoNFe(ttk.Frame):
         self.ent_pasta.insert(0, pasta)
 
     def _emp_fil(self):
+        """Empresa/filial DA NOTA — onde ela vai ser gravada."""
         try:
             emp = int(self.ent_empresa.get().strip() or 1)
         except ValueError:
@@ -602,10 +635,54 @@ class TelaImportacaoNFe(ttk.Frame):
             fil = 1
         return emp, fil
 
+    def _emp_fil_cad(self):
+        """Empresa/filial DOS CADASTROS — onde estão cliente, produto e natureza.
+
+        Em branco cai na da nota, que é o caso comum de quem tem tudo na mesma.
+        """
+        emp_nota, fil_nota = self._emp_fil()
+        try:
+            emp = int(self.ent_empresa_cad.get().strip() or emp_nota)
+        except ValueError:
+            emp = emp_nota
+        try:
+            fil = int(self.ent_filial_cad.get().strip() or fil_nota)
+        except ValueError:
+            fil = fil_nota
+        return emp, fil
+
+    def _emp_fil_analise(self, cadastros=False):
+        """O par empresa/filial da análise em tela.
+
+        `cadastros=True` devolve o par dos cadastros. Uma análise feita antes de
+        este par existir não tem as chaves — aí cai na da nota em vez de estourar
+        um KeyError no meio de um cadastro em lote.
+        """
+        emp = self.analise['emp']
+        fil = self.analise['fil']
+        if not cadastros:
+            return emp, fil
+        return self.analise.get('emp_cad', emp), self.analise.get('fil_cad', fil)
+
+    def _atualizar_aviso_cadastros(self):
+        """Diz em uma linha quando nota e cadastros estão em filiais diferentes."""
+        emp, fil = self._emp_fil()
+        empc, filc = self._emp_fil_cad()
+        if (emp, fil) == (empc, filc):
+            self.lbl_cad.config(text="(mesma da nota)", fg="#555")
+        else:
+            self.lbl_cad.config(
+                text=f"⚠ nota vai para {emp}/{fil}; cliente, produto e natureza "
+                     f"são lidos e cadastrados em {empc}/{filc}", fg="#B45309")
+
     def _carregar_combos_erp(self):
         """Preenche local de cobrança, vendedor, centro de custo e conta contábil
-        com o que existe no ERP."""
-        emp, fil = self._emp_fil()
+        com o que existe no ERP.
+
+        Todos são CADASTROS, então saem da filial dos cadastros — não da filial
+        em que a nota vai entrar.
+        """
+        emp, fil = self._emp_fil_cad()
         lcs = vends = ccs = contas = []
         self._exercicio = None
         try:
@@ -722,13 +799,15 @@ class TelaImportacaoNFe(ttk.Frame):
         # empresa/filial lidos aqui, na thread da UI — a thread de análise não
         # pode tocar em widget (some se a tela for fechada no meio).
         emp, fil = self._emp_fil()
+        emp_cad, fil_cad = self._emp_fil_cad()
         # as flags desejadas também: é por elas que a fase 2 decide se alguma
         # variação do CFOP serve ou se é preciso cadastrar uma nova
         self._flags_desejadas = self._flags_nat()
-        threading.Thread(target=self._analisar_bg, args=(pasta, cnpj, emp, fil),
+        threading.Thread(target=self._analisar_bg,
+                         args=(pasta, cnpj, emp, fil, emp_cad, fil_cad),
                          daemon=True).start()
 
-    def _analisar_bg(self, pasta, cnpj, emp, fil):
+    def _analisar_bg(self, pasta, cnpj, emp, fil, emp_cad, fil_cad):
         try:
             def prog(i, total):
                 if total and (i % 25 == 0 or i == total):
@@ -750,8 +829,9 @@ class TelaImportacaoNFe(ttk.Frame):
                 self.lbl_status.config(text=f"{len(notas)} nota(s) lida(s). Consultando o ERP..."),
                 self.progresso.config(value=45)))
 
-            dados = self._carregar_erp(emp, fil)
-            analise = self._classificar(notas, dados, emp, fil, cnpj)
+            dados = self._carregar_erp(emp, fil, emp_cad, fil_cad)
+            analise = self._classificar(notas, dados, emp, fil, cnpj,
+                                        emp_cad, fil_cad)
             if not self._viva():
                 return
             self.notas = notas
@@ -762,16 +842,27 @@ class TelaImportacaoNFe(ttk.Frame):
             self._ui(lambda: messagebox.showerror("Erro", f"Falha na análise:\n{msg}"))
             self._ui(lambda: self.btn_analisar.config(state=tk.NORMAL))
 
-    def _carregar_erp(self, emp, fil):
-        """Fotografa o que o ERP já tem: clientes, naturezas, produtos e chaves de NF."""
-        d = {}
+    def _carregar_erp(self, emp, fil, emp_cad=None, fil_cad=None):
+        """Fotografa o que o ERP já tem: clientes, naturezas, produtos e chaves de NF.
+
+        DOIS pares de empresa/filial, e a distinção importa:
+          (emp_cad, fil_cad) — onde estão os CADASTROS: cliente/fornecedor,
+              natureza de operação, produto. É onde procuro e onde cadastro.
+          (emp, fil) — onde a NOTA vai entrar. É de lá que saem as chaves de NF-e
+              e os títulos já existentes, senão a checagem de duplicidade olharia
+              para uma filial que não é a que vai receber a nota.
+        """
+        emp_cad = emp if emp_cad is None else emp_cad
+        fil_cad = fil if fil_cad is None else fil_cad
+        d = {'emp_cad': emp_cad, 'fil_cad': fil_cad}
         with FirebirdService(self.config_db) as fb:
             cli_por_doc = {}
             for r in fb.query(
                 "SELECT CF_CODIGO, CF_CPF_CGC, CF_RAZAO, CF_ENDERECO, CF_NRO_END, CF_BAIRRO, "
                 "       CF_CEP, CF_CIDADE, CF_CIDADE_EMPRESA, CF_CIDADE_FILIAL, CF_FONE1, "
                 "       CF_RG_IE, CF_CLIENTE, CF_FORNECEDOR, CF_REPRESENTANTE "
-                "FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?", [emp, fil]
+                "FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?",
+                [emp_cad, fil_cad]
             ):
                 doc = so_digitos(r.get('cf_cpf_cgc'))
                 if doc:
@@ -784,7 +875,8 @@ class TelaImportacaoNFe(ttk.Frame):
                 for r in fb.query(
                     f"SELECT {pref}_CODIGO, {pref}_DESCRICAO_ABR, {pref}_FLUXO_CAIXA, "
                     f"       {pref}_CONTABILIDADE, {pref}_ESTOQUE, {pref}_DESATIVADO "
-                    f"FROM {tab} WHERE {pref}_EMPRESA = ? AND {pref}_FILIAL = ?", [emp, fil]
+                    f"FROM {tab} WHERE {pref}_EMPRESA = ? AND {pref}_FILIAL = ?",
+                    [emp_cad, fil_cad]
                 ):
                     cod = str(r.get(f'{pref.lower()}_codigo') or '').strip()
                     if cod:
@@ -794,7 +886,8 @@ class TelaImportacaoNFe(ttk.Frame):
             prods = fb.query(
                 "SELECT PRODUTO_CODIGO, PRODUTO_DESCRICAO, PRODUTO_ATIVO, "
                 "       PRODUTO_COD_IMPORTACAO, PRODUTO_COD_AUXILIAR "
-                "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?", [emp, fil])
+                "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?",
+                [emp_cad, fil_cad])
             d['indices_produto'] = self._indexar_produtos(prods)
 
             chaves = set()
@@ -833,8 +926,11 @@ class TelaImportacaoNFe(ttk.Frame):
             d['tit_rec'], d['tit_pag'] = tit_rec, tit_pag
         return d
 
-    def _classificar(self, notas, dados, emp, fil, cnpj_emp=''):
+    def _classificar(self, notas, dados, emp, fil, cnpj_emp='',
+                     emp_cad=None, fil_cad=None):
         """Monta as 4 listas de análise a partir das notas e da foto do ERP."""
+        emp_cad = dados.get('emp_cad', emp) if emp_cad is None else emp_cad
+        fil_cad = dados.get('fil_cad', fil) if fil_cad is None else fil_cad
         clientes = dados['clientes']
         indices = dados['indices_produto']
         cnpj_emp = so_digitos(cnpj_emp)
@@ -944,6 +1040,14 @@ class TelaImportacaoNFe(ttk.Frame):
                 'status': status, 'tag': tag,
             })
 
+        # A VARIAÇÃO ESCOLHIDA AQUI É A QUE VAI PARA A NOTA. Sem este mapa, a
+        # gravação reescolhia por conta própria ("a primeira que começa com o
+        # CFOP") e vinculava a nota à 510101 (fluxo=S) numa importação SEM
+        # financeiro: o ERP passava a esperar parcelas, não achava, e recusava
+        # imprimir o DANFE.
+        dados['nat_escolhida'] = {(f['tipo'], f['cfop']): f['codigo_erp']
+                                  for f in fase2 if f['codigo_erp']}
+
         # ---- fase 3: produtos
         prods = {}
         for n in notas:
@@ -970,6 +1074,11 @@ class TelaImportacaoNFe(ttk.Frame):
                 status = ('OK (gêmeo inativo ignorado: '
                           + ', '.join(map(str, info['gemeos_inativos'])) + ')')
                 tag = 'OK'
+            elif info.get('ativo') == 'N':
+                # A nota é histórico: o produto que ela usou foi esse mesmo, e o
+                # cliente pode tê-lo inativado depois. Inativo NÃO impede importar
+                # — só avisa, para não parecer que passou batido.
+                status, tag = 'OK (produto inativo no ERP — nota antiga)', 'AVISO'
             else:
                 status, tag = 'OK', 'OK'
             fase3.append({
@@ -982,7 +1091,8 @@ class TelaImportacaoNFe(ttk.Frame):
         # ---- fase 4: notas
         pend_cli = {f['documento'] for f in fase1 if f['tag'] != 'OK'}
         pend_nat = {(f['tipo'], f['cfop']) for f in fase2 if f['tag'] == 'ERRO'}
-        pend_prod = {f['cod_xml'] for f in fase3 if f['tag'] != 'OK'}
+        # só ERRO bloqueia: 'AVISO' na fase 3 é produto inativo, que importa igual
+        pend_prod = {f['cod_xml'] for f in fase3 if f['tag'] == 'ERRO'}
         fase4 = []
         for n in sorted(notas, key=lambda x: (x['tp_nf'], x['nro_nf'])):
             tipo = 'SAÍDA' if n['tp_nf'] == 1 else 'ENTRADA'
@@ -1051,6 +1161,7 @@ class TelaImportacaoNFe(ttk.Frame):
             })
         return {'fase1': fase1, 'fase2': fase2, 'fase3': fase3, 'fase4': fase4,
                 'dados': dados, 'emp': emp, 'fil': fil,
+                'emp_cad': emp_cad, 'fil_cad': fil_cad,
                 'emitentes': emitentes, 'cnpj_emp': cnpj_emp}
 
     # ----------------------------------------------------------- RENDER
@@ -1136,7 +1247,7 @@ class TelaImportacaoNFe(ttk.Frame):
         self.btn_importar.config(state=tk.NORMAL if no_escopo else tk.DISABLED)
         pend = (sum(1 for f in analise['fase1'] if f['tag'] != 'OK')
                 + sum(1 for f in analise['fase2'] if f['tag'] == 'ERRO')
-                + sum(1 for f in analise['fase3'] if f['tag'] != 'OK'))
+                + sum(1 for f in analise['fase3'] if f['tag'] == 'ERRO'))
         fora = ok - no_escopo
         extra = f" ({fora} fora do escopo '{self._escopo()}')" if fora else ""
         self.lbl_status.config(
@@ -1197,7 +1308,7 @@ class TelaImportacaoNFe(ttk.Frame):
                         if f['status'] in ('JÁ IMPORTADA', 'TERCEIROS (ignorada)'))
         pend = (sum(1 for f in self.analise['fase1'] if f['tag'] != 'OK')
                 + sum(1 for f in self.analise['fase2'] if f['tag'] == 'ERRO')
-                + sum(1 for f in self.analise['fase3'] if f['tag'] != 'OK'))
+                + sum(1 for f in self.analise['fase3'] if f['tag'] == 'ERRO'))
         self.card_notas.lbl_valor.config(text=str(len(marcadas)))
         self.card_valor.lbl_valor.config(text=self._brl(valor))
         self.card_pendencias.lbl_valor.config(text=str(pend))
@@ -1247,7 +1358,8 @@ class TelaImportacaoNFe(ttk.Frame):
             return messagebox.showinfo("Aviso", "Nenhuma contraparte pendente.")
         if not messagebox.askyesno("Confirmar", f"Cadastrar {len(pend)} cliente(s)/fornecedor(es)?"):
             return
-        emp, fil = self.analise['emp'], self.analise['fil']
+        # cadastro vai para a filial DOS CADASTROS, não para a da nota
+        emp, fil = self._emp_fil_analise(cadastros=True)
         criados, erros, log = 0, 0, []
         try:
             with FirebirdService(self.config_db) as fb:
@@ -1366,7 +1478,8 @@ class TelaImportacaoNFe(ttk.Frame):
                    if fluxo == 'N' else "")
                 + "Nenhuma natureza existente é alterada."):
             return
-        emp, fil = self.analise['emp'], self.analise['fil']
+        # a natureza é cadastro: entra na filial dos cadastros
+        emp, fil = self._emp_fil_analise(cadastros=True)
         criados, erros, log = 0, 0, []
         try:
             with FirebirdService(self.config_db) as fb:
@@ -1432,7 +1545,8 @@ class TelaImportacaoNFe(ttk.Frame):
                 "O código do XML vai para o Código Auxiliar e o de Importação,\n"
                 "e o produto recebe o próximo código livre do ERP."):
             return
-        emp, fil = self.analise['emp'], self.analise['fil']
+        # o produto é cadastro: entra na filial dos cadastros
+        emp, fil = self._emp_fil_analise(cadastros=True)
         tipo = self.config.get('IMPORTACAO', 'tipo', fallback='4')
         try:
             tipo_id = int(str(tipo).split('-')[0].strip())
@@ -1502,15 +1616,17 @@ class TelaImportacaoNFe(ttk.Frame):
         fin = "COM" if self.var_gerar_fin.get() else "SEM"
         cc = self.cmb_cc.get().strip() or '(nenhum)'
         conta = self.cmb_conta.get().strip() or '(nenhuma)'
-        # Aviso da combinação que engana: sem gerar título aqui, mas com fluxo de
-        # caixa ligado nas naturezas, o faturamento do ERP gera o financeiro depois.
+        # A nota vai amarrada à variação que a fase 2 escolheu, e ela casa com as
+        # flags pedidas. Se ainda assim sobrar fluxo=S numa importação SEM
+        # financeiro, é incoerência da análise — a nota entraria pedindo parcela
+        # que ninguém vai gravar, e o ERP recusaria imprimir o DANFE.
         fluxos = {f['fluxo'] for f in self.analise['fase2']
                   if f.get('codigo_erp') and f['tipo'] == ('S' if 1 in tipos else 'E')}
         alerta = ""
         if not self.var_gerar_fin.get() and fluxos & {'S'}:
-            alerta = ("\n⚠ ATENÇÃO: há natureza(s) desta análise com FLUXO DE CAIXA = S.\n"
-                      "Mesmo sem gerar título aqui, o faturamento do ERP vai gerar.\n"
-                      "Desmarque 'Fluxo de caixa' e use ⤓ Aplicar antes de importar.\n")
+            alerta = ("\n⚠ ATENÇÃO: há natureza escolhida com FLUXO DE CAIXA = S numa\n"
+                      "importação SEM financeiro. Reanalise antes de importar — a\n"
+                      "análise em tela é anterior à mudança do checkbox.\n")
         if not messagebox.askyesno(
                 "Confirmar importação",
                 f"Escopo: {escopo}\n\n"
@@ -1615,14 +1731,43 @@ class TelaImportacaoNFe(ttk.Frame):
 
     # ---- helpers do motor
     def _nat_para(self, dados, tipo, cfop):
-        """Código da natureza no ERP a partir do CFOP do XML."""
-        nats = dados['nat_saida'] if tipo == 'S' else dados['nat_entrada']
-        if cfop in nats:
-            return cfop
-        for cod in nats:
-            if cod.startswith(cfop):
-                return cod
-        return None
+        """Variação de natureza que a FASE 2 escolheu para este CFOP.
+
+        Não reescolhe nada aqui. O `for cod in nats: if cod.startswith(cfop)`
+        que estava neste lugar pegava a primeira variação que aparecesse na
+        ordem do dicionário — com 510101 (fluxo=S) e 510102 (fluxo=N) no ERP,
+        uma importação SEM financeiro caía na 510101. A nota entrava amarrada a
+        uma natureza que gera financeiro, o ERP ficava esperando parcelas que
+        ninguém gravou e o DANFE não imprimia.
+
+        Nota só chega à gravação com as três fases sem ERRO, então todo CFOP
+        dela tem escolha aqui. Devolver None é bug, não caso normal.
+        """
+        return (dados.get('nat_escolhida') or {}).get((tipo, cfop))
+
+    def _valores_parcelas(self, n, total_erp, log):
+        """Valores das parcelas fechando EXATAMENTE no total que o ERP calculou.
+
+        O ERP se recusa a imprimir o DANFE quando a soma das parcelas não bate
+        com NFS_VALOR_TOTAL_NOTA — e esse total não é o que eu mando, é o que o
+        trigger TR_NF_SAIDA_TOTAL recalcula (produto + IPI + ST + frete + seguro
+        + despesas − desconto). As duplicatas do XML somam o vNF da DANFE, que
+        difere desse total quando há ICMS desonerado. A diferença vai para a
+        ÚLTIMA parcela e fica registrada no log — uma nota que não imprime é
+        pior que uma parcela com centavos deslocados, mas isso não pode
+        acontecer calado.
+        """
+        valores = [round(float(p.get('v_dup') or 0.0), 2) for p in n['parcelas']]
+        alvo = round(float(total_erp or 0.0), 2)
+        dif = round(alvo - round(sum(valores), 2), 2)
+        if dif and valores:
+            valores[-1] = round(valores[-1] + dif, 2)
+            aviso = "arredondamento" if abs(dif) <= 0.05 else "ATENÇÃO: diferença grande"
+            log.append(f"   ⚠ NF {n['nro_nf']}: parcelas somavam "
+                       f"{self._brl(alvo - dif)} e o total da nota no ERP é "
+                       f"{self._brl(alvo)} — {self._brl(dif)} somado à última "
+                       f"parcela para o DANFE poder ser impresso ({aviso})")
+        return valores
 
     def _prod_para(self, dados, c_prod):
         info, _campo, _amb = self._resolver_produto(c_prod, dados['indices_produto'], 'auto')
@@ -1633,22 +1778,29 @@ class TelaImportacaoNFe(ttk.Frame):
         return [t[i:i + TAM_OBS] for i in range(0, min(len(t), TAM_OBS * QTDE_OBS), TAM_OBS)]
 
     # ---- centro de custo e conta contábil (opcionais, escolhidos na tela)
-    def _cc_nota_saida(self, cur, emp, fil, num, valor):
+    def _cc_nota_saida(self, cur, emp, fil, num, valor, emp_cad=None, fil_cad=None):
         cc = getattr(self, '_cc_padrao', None)
         if not cc:
             return
+        # NFCC_EMPRESA/FILIAL amarra na nota; NFCC_CC_* aponta para TABELA_CC
+        empc = emp if emp_cad is None else emp_cad
+        filc = fil if fil_cad is None else fil_cad
         cur.execute("""
             INSERT INTO TABELA_NF_SAIDA_CC (
                 NFCC_EMPRESA, NFCC_FILIAL, NFCC_NUMERO, NFCC_LANCAMENTO,
                 NFCC_CC_EMPRESA, NFCC_CC_FILIAL, NFCC_CC,
                 NFCC_PORCENTAGEM, NFCC_VALOR
             ) VALUES (?,?,?,1, ?,?,?, 100, ?)
-        """, [emp, fil, num, emp, fil, cc, float(valor or 0.0)])
+        """, [emp, fil, num, empc, filc, cc, float(valor or 0.0)])
 
-    def _cc_nota_entrada(self, cur, emp, fil, lan, forn, valor):
+    def _cc_nota_entrada(self, cur, emp, fil, lan, forn, valor,
+                         emp_cad=None, fil_cad=None):
         cc = getattr(self, '_cc_padrao', None)
         if not cc:
             return
+        # NFCC_FORNECEDOR_* e NFCC_CC_* são cadastros; NFCC_EMPRESA/FILIAL é a nota
+        empc = emp if emp_cad is None else emp_cad
+        filc = fil if fil_cad is None else fil_cad
         cur.execute("""
             INSERT INTO TABELA_NF_ENTRADA_CC (
                 NFCC_EMPRESA, NFCC_FILIAL, NFCC_LANCAMENTO,
@@ -1656,26 +1808,30 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFCC_CODIGO, NFCC_CC_EMPRESA, NFCC_CC_FILIAL, NFCC_CODIGO_CC,
                 NFCC_PORCENTAGEM, NFCC_VALOR, NFCC_USUARIO_INCL
             ) VALUES (?,?,?, ?,?,?, 1, ?,?,?, 100, ?, ?)
-        """, [emp, fil, lan, emp, fil, forn, emp, fil, cc,
+        """, [emp, fil, lan, empc, filc, forn, empc, filc, cc,
               float(valor or 0.0), USUARIO_PADRAO])
 
-    def _rateio_titulo_rec(self, cur, emp, fil, cod, serie, cli, emissao, valor):
+    def _rateio_titulo_rec(self, cur, emp, fil, cod, serie, cli, emissao, valor,
+                           emp_cad=None, fil_cad=None):
         """Centro de custo e conta contábil do título no Receber."""
         rateio_contabil.rateio_receber(
             cur, emp, fil, cod, serie, cli, emissao, valor,
             cc=getattr(self, '_cc_padrao', None),
             conta=getattr(self, '_conta_padrao', None),
             exercicio=getattr(self, '_exercicio', None),
-            reduzidos=getattr(self, '_conta_reduzido', {}))
+            reduzidos=getattr(self, '_conta_reduzido', {}),
+            emp_cad=emp_cad, fil_cad=fil_cad)
 
-    def _rateio_titulo_pagar(self, cur, emp, fil, cod, serie, forn, emissao, valor):
+    def _rateio_titulo_pagar(self, cur, emp, fil, cod, serie, forn, emissao, valor,
+                             emp_cad=None, fil_cad=None):
         """Centro de custo e conta contábil do título no Pagar."""
         rateio_contabil.rateio_pagar(
             cur, emp, fil, cod, serie, forn, emissao, valor,
             cc=getattr(self, '_cc_padrao', None),
             conta=getattr(self, '_conta_padrao', None),
             exercicio=getattr(self, '_exercicio', None),
-            reduzidos=getattr(self, '_conta_reduzido', {}))
+            reduzidos=getattr(self, '_conta_reduzido', {}),
+            emp_cad=emp_cad, fil_cad=fil_cad)
 
     def _qtde_volume(self, qvol):
         """NFS_QTDE_VOLUME é VARCHAR(10): gravar um float viraria o texto '2.0' e
@@ -1688,6 +1844,14 @@ class TelaImportacaoNFe(ttk.Frame):
         return str(n) if n > 0 else ''
 
     def _gravar_saida(self, cur, n, f, emp, fil, dados, gerar_fin, ult_grav, log):
+        # (emp, fil) é a filial DA NOTA; (empc, filc) é a dos CADASTROS. Cada
+        # coluna vai no par que a FK dela aponta — conferido em RDB$REF_CONSTRAINTS:
+        #   NFS_EMPRESA/FILIAL -> TABELA_FILIAL ................. nota
+        #   NFS_CLIENTE_*, NFS_CIDADE_*, NFS_NAT_OPERACAO_*,
+        #   NFS_LC_*, NFS_VENDEDOR_* ............................ cadastros
+        # Só NFP_ESTOQUE_* não tem FK e fica na filial da nota: é o lugar do
+        # movimento, não um cadastro (e esta rotina não movimenta estoque).
+        empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
         cli = f['contraparte_cod']
         erp = dados['clientes'].get((n.get('contraparte') or {}).get('documento', ''), {})
         cur.execute("SELECT COALESCE(MAX(NFS_NUMERO), 0) + 1 FROM TABELA_NF_SAIDA "
@@ -1697,6 +1861,14 @@ class TelaImportacaoNFe(ttk.Frame):
         tr = n['transporte']
         cfop_primeiro = (n['itens'][0].get('cfop') if n['itens'] else '') or ''
         nat = self._nat_para(dados, 'S', str(cfop_primeiro).strip())
+        if not nat:
+            raise ValueError(
+                f"CFOP {cfop_primeiro} sem variação de natureza escolhida na análise — "
+                f"reanalise antes de importar")
+        # Sem gerar financeiro não existe parcela nenhuma. Dizer no cabeçalho que
+        # a nota tem N parcelas e não gravar nenhuma é o que fazia o ERP recusar o
+        # DANFE ("valor das parcelas diferente do valor total da nota").
+        qtde_parc = len(n['parcelas']) if gerar_fin else 0
         # Local de cobrança e vendedor não vêm no XML. O local é o escolhido na
         # tela; o vendedor sai do cadastro do cliente (CF_REPRESENTANTE) e cai no
         # padrão da tela quando o cliente não tem um vinculado.
@@ -1745,7 +1917,7 @@ class TelaImportacaoNFe(ttk.Frame):
                       0,0)
         """, [
             emp, fil, num, n['nro_nf'], str(n['serie'])[:3],
-            emp, fil, cli,
+            empc, filc, cli,
             (erp.get('cf_razao') or (n['contraparte'].get('razao') or ''))[:50],
             (erp.get('cf_endereco') or n['contraparte'].get('endereco') or '')[:50],
             str(erp.get('cf_nro_end') or n['contraparte'].get('nro_end') or '')[:10],
@@ -1754,9 +1926,9 @@ class TelaImportacaoNFe(ttk.Frame):
             str(erp.get('cf_fone1') or n['contraparte'].get('fone1') or '')[:15],
             (n['contraparte'].get('documento_formatado') or '')[:18],
             str(erp.get('cf_rg_ie') or n['contraparte'].get('ie') or '')[:20],
-            erp.get('cf_cidade_empresa') or emp, erp.get('cf_cidade_filial') or fil,
+            erp.get('cf_cidade_empresa') or empc, erp.get('cf_cidade_filial') or filc,
             erp.get('cf_cidade'),
-            emp, fil, nat, (n.get('nat_op') or '')[:50],
+            empc, filc, nat, (n.get('nat_op') or '')[:50],
             n['data_emissao'], n['data_saida'] or n['data_emissao'], n['hora_emissao'],
             # TR_NF_SAIDA_PRODUTO_NF acumula estes campos a cada item inserido:
             # entram zerados e são acertados no UPDATE após os itens, senão dobram.
@@ -1769,12 +1941,12 @@ class TelaImportacaoNFe(ttk.Frame):
             (tr['transportadora'].get('documento_formatado') or '')[:18],
             (tr['transportadora'].get('ie') or '')[:20],
             (tr.get('placa') or '')[:10], (tr.get('placa_uf') or '')[:2],
-            len(n['parcelas']), ORIGEM_IMPORTACAO, n['chave'][:44],
+            qtde_parc, ORIGEM_IMPORTACAO, n['chave'][:44],
             str(n.get('modelo') or '55')[:2], (n.get('inf_cpl') or '')[:5000],
             (n.get('protocolo') or '')[:20], USUARIO_PADRAO,
-            emp, fil, lc,
-            emp, fil, vend,
-            emp, fil,
+            empc, filc, lc,            # NFS_LC_* -> TABELA_LOCAL_COBRANCA
+            empc, filc, vend,          # NFS_VENDEDOR_* -> TABELA_VENDEDOR
+            empc, filc,                # NFS_TRANS_* (transportadora é cadastro)
         ])
 
         # As colunas de ZERO_NFP entram com 0 em vez de NULL — ver o comentário
@@ -1806,14 +1978,14 @@ class TelaImportacaoNFe(ttk.Frame):
                           ?,?,?,?,1, ?,?, ?,?,?, 1, '*'{vals_zero})
             """, [
                 emp, fil, num, item['n_item'],
-                emp, fil, prod,
+                empc, filc, prod,          # NFP_PRODUTO_* -> TABELA_PRODUTO
                 (item.get('x_prod') or '')[:60], (item.get('u_com') or 'UN')[:2],
                 n['data_emissao'],
                 item.get('q_com', 0.0), item.get('q_com', 0.0),
                 item.get('v_un_com', 0.0), item.get('v_un_com', 0.0),
                 item.get('v_prod', 0.0), item.get('v_desc', 0.0),
                 item.get('v_frete', 0.0), item.get('v_seg', 0.0),
-                emp, fil, nat_it,
+                empc, filc, nat_it,        # NFP_NAT_OP_* -> TABELA_NAT_OPERACAO_SAIDA
                 str(item.get('icms_cst') or '')[:3],
                 item.get('p_icms', 0.0), item.get('p_red_bc', 0.0),
                 item.get('v_bc_icms', 0.0), item.get('v_icms', 0.0),
@@ -1825,9 +1997,9 @@ class TelaImportacaoNFe(ttk.Frame):
                 str(item.get('cofins_cst') or '')[:3],
                 str(item.get('ipi_cst') or '99')[:3],
                 (item.get('ncm') or '')[:14], (item.get('c_benef') or '')[:10],
-                emp, fil,
-                emp, fil,
-                emp, fil, vend,
+                empc, filc,                # NFP_LE_* -> TABELA_LOCAL_ESTOQUE
+                emp, fil,                  # NFP_ESTOQUE_* (sem FK): filial do movimento
+                empc, filc, vend,          # NFP_VENDEDOR_* -> TABELA_VENDEDOR
             ])
 
         # Os itens já dispararam o trigger que acumula os totais; aqui os campos
@@ -1872,7 +2044,8 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFICMS_NAT_OP_EMP, NFICMS_NAT_OP_FIL, NFICMS_NAT_OP
             ) VALUES (?,?,?,1, 0,?,?,?, 0,?, ?,?, 0, ?,?,?)
         """, [emp, fil, num, t.get('vBC', 0.0), t.get('vNF', 0.0), t.get('vICMS', 0.0),
-              t.get('vIPI', 0.0), t.get('vBCST', 0.0), t.get('vST', 0.0), emp, fil, nat])
+              t.get('vIPI', 0.0), t.get('vBCST', 0.0), t.get('vST', 0.0),
+              empc, filc, nat])   # NFICMS_NAT_OP_* -> TABELA_NAT_OPERACAO_SAIDA
 
         chunks = self._obs_chunks(n.get('inf_cpl'))
         if chunks:
@@ -1883,18 +2056,22 @@ class TelaImportacaoNFe(ttk.Frame):
                 f"NFOBS_NUMERO, NFOBS_LANCAMENTO, {cols}) VALUES (?,?,?,1, {marks})",
                 [emp, fil, num] + chunks)
 
-        self._cc_nota_saida(cur, emp, fil, num, t.get('vNF', 0.0))
+        self._cc_nota_saida(cur, emp, fil, num, t.get('vNF', 0.0), empc, filc)
 
         if gerar_fin and n['parcelas']:
-            self._gravar_parcelas_saida(cur, n, num, cli, emp, fil, dados, ult_grav, log)
+            self._gravar_parcelas_saida(cur, n, num, cli, emp, fil, dados,
+                                        ult_grav, log, total_erp)
         log.append(f"✅ NF {n['nro_nf']}/{n['serie']} SAÍDA -> NFS_NUMERO {num}, "
                    f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}")
 
-    def _gravar_parcelas_saida(self, cur, n, num, cli, emp, fil, dados, ult_grav, log):
+    def _gravar_parcelas_saida(self, cur, n, num, cli, emp, fil, dados, ult_grav,
+                               log, total_erp):
+        empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
         erp = dados['clientes'].get((n.get('contraparte') or {}).get('documento', ''), {})
         lc = getattr(self, '_lc_padrao', None)
         vend = erp.get('cf_representante') or getattr(self, '_vend_padrao', None)
-        for i, p in enumerate(n['parcelas'], start=1):
+        valores = self._valores_parcelas(n, total_erp, log)
+        for i, (p, val) in enumerate(zip(n['parcelas'], valores), start=1):
             venc = self._data_iso(p.get('d_venc')) or n['data_emissao']
             cur.execute("""
                 INSERT INTO TABELA_NF_SAIDA_PARCELA (
@@ -1904,7 +2081,8 @@ class TelaImportacaoNFe(ttk.Frame):
                     NFPARC_TC_EMPRESA, NFPARC_TC_FILIAL
                 ) VALUES (?,?,?,?, ?,?,?, ?,?,?, ?,?)
             """, [emp, fil, num, i, int(p.get('dias') or 0), venc,
-                  float(p.get('v_dup') or 0.0), emp, fil, lc, emp, fil])
+                  val, empc, filc, lc,   # NFPARC_LC_* -> TABELA_LOCAL_COBRANCA
+                  empc, filc])           # NFPARC_TC_* -> TABELA_TIPO_COBRANCA
 
         cod_tit = str(n['nro_nf']).lstrip('0') or '0'
         serie = str(n['serie']).strip().upper()[:3]
@@ -1912,7 +2090,7 @@ class TelaImportacaoNFe(ttk.Frame):
             log.append(f"   ⚠ título {cod_tit}/{serie} já existe no Receber — "
                        f"parcelas da nota gravadas, título NÃO duplicado")
             return
-        total = sum(float(p.get('v_dup') or 0.0) for p in n['parcelas'])
+        total = round(sum(valores), 2)
         venc1 = self._data_iso(n['parcelas'][0].get('d_venc')) or n['data_emissao']
         dias1 = int(n['parcelas'][0].get('dias') or 0)
         cur.execute("""
@@ -1928,13 +2106,17 @@ class TelaImportacaoNFe(ttk.Frame):
                 TIT_VENDEDOR_EMPRESA, TIT_VENDEDOR_FILIAL, TIT_VENDEDOR
             ) VALUES (?,?,?,?, ?,?,?, ?,?,?,?,2, ?,?,?,?,?,?, ?,?,0,0,
                       ?,?,?,?, 'N',?,?,'N', ?,?,?,?, ?,?,?)
-        """, [emp, fil, cod_tit, serie, emp, fil, cli,
-              n['data_emissao'], n['data_emissao'], emp, fil,
+        """, [emp, fil, cod_tit, serie,      # TIT_EMPRESA/FILIAL -> TABELA_FILIAL (nota)
+              empc, filc, cli,               # TIT_CLIENTE_* -> TABELA_CLI_FOR
+              n['data_emissao'], n['data_emissao'], empc, filc,   # TIT_TL_* (tipo lanç.)
               len(n['parcelas']), venc1, dias1, total, ORIGEM_IMPORTACAO, total,
-              emp, fil, total, total, total, total, emp, fil,
-              USUARIO_PADRAO, ult_grav, emp, fil,
-              emp, fil, vend])
-        for i, p in enumerate(n['parcelas'], start=1):
+              empc, filc,                    # TIT_MOEDA_* -> TABELA_MOEDA
+              total, total, total, total,
+              empc, filc,                    # TIT_SEGMENTO_* -> SEGMENTO_OPERACIONAL
+              USUARIO_PADRAO, ult_grav,
+              empc, filc,                    # TIT_NAT_OP_* -> NAT_OPERACAO_SAIDA
+              empc, filc, vend])             # TIT_VENDEDOR_* -> TABELA_VENDEDOR
+        for i, (p, val) in enumerate(zip(n['parcelas'], valores), start=1):
             venc = self._data_iso(p.get('d_venc')) or n['data_emissao']
             cur.execute("""
                 INSERT INTO TABELA_TITULO_PARCELA_REC (
@@ -1950,17 +2132,23 @@ class TelaImportacaoNFe(ttk.Frame):
                     TPARC_VENDEDOR_EMPRESA, TPARC_VENDEDOR_FILIAL, TPARC_VENDEDOR
                 ) VALUES (?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,0, 0,'N',0,0,0, 0,0,?, 'S','N',0, ?,
                           ?,?,?, ?,?,?)
-            """, [emp, fil, cod_tit, serie, i, emp, fil, cli,
+            """, [emp, fil, cod_tit, serie, i,
+                  empc, filc, cli,           # TPARC_CLIENTE_* -> TABELA_CLI_FOR
                   n['data_emissao'], n['data_emissao'], int(p.get('dias') or 0), venc,
-                  emp, fil, float(p.get('v_dup') or 0.0), ORIGEM_IMPORTACAO,
+                  empc, filc, val, ORIGEM_IMPORTACAO,   # TPARC_MOEDA_*
                   ult_grav,
-                  emp, fil, lc, emp, fil, vend])
+                  empc, filc, lc,            # TPARC_LC_* -> TABELA_LOCAL_COBRANCA
+                  empc, filc, vend])         # TPARC_VENDEDOR_* -> TABELA_VENDEDOR
         self._rateio_titulo_rec(cur, emp, fil, cod_tit, serie, cli,
-                                n['data_emissao'], total)
+                                n['data_emissao'], total, empc, filc)
         log.append(f"   💰 título {cod_tit}/{serie} no Receber, "
                    f"{len(n['parcelas'])} parcela(s), {self._brl(total)}")
 
     def _gravar_entrada(self, cur, n, f, emp, fil, dados, gerar_fin, ult_grav, log):
+        # mesma separação da saída: NFE_EMPRESA/FILIAL -> TABELA_FILIAL (a nota);
+        # NFE_FORNECEDOR_*, NFE_NAT_OPERACAO_*, NFE_CID_*, NFE_LOC_COBR_*,
+        # NFE_COBRADOR_*, NFE_SEGMENTO_*, NFE_TF_* -> cadastros.
+        empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
         forn = f['contraparte_cod']
         erp = dados['clientes'].get((n.get('contraparte') or {}).get('documento', ''), {})
         cur.execute("SELECT COALESCE(MAX(NFE_LANCAMENTO), 0) + 1 FROM TABELA_NF_ENTRADA "
@@ -1969,6 +2157,12 @@ class TelaImportacaoNFe(ttk.Frame):
         t = n['totais']
         cfop_primeiro = (n['itens'][0].get('cfop') if n['itens'] else '') or ''
         nat = self._nat_para(dados, 'E', str(cfop_primeiro).strip())
+        if not nat:
+            raise ValueError(
+                f"CFOP {cfop_primeiro} sem variação de natureza escolhida na análise — "
+                f"reanalise antes de importar")
+        # mesma regra da saída: sem financeiro, o cabeçalho declara 0 parcelas
+        qtde_parc = len(n['parcelas']) if gerar_fin else 0
         lc = getattr(self, '_lc_padrao', None)
         vend = erp.get('cf_representante') or getattr(self, '_vend_padrao', None)
 
@@ -2010,16 +2204,17 @@ class TelaImportacaoNFe(ttk.Frame):
                       ?,?,?,?,
                       ?,?,?)
         """, [
-            emp, fil, lan, emp, fil, forn,
+            emp, fil, lan,
+            empc, filc, forn,          # NFE_FORNECEDOR_* -> TABELA_CLI_FOR
             n['nro_nf'], str(n['serie'])[:3],
-            emp, fil, nat,
+            empc, filc, nat,           # NFE_NAT_OPERACAO_* -> NAT_OPERACAO_ENTRADA
             n['data_emissao'], n['data_emissao'], datetime.date.today(), n['data_emissao'],
             t.get('vDesc', 0.0), t.get('vFrete', 0.0), t.get('vSeg', 0.0), t.get('vOutro', 0.0),
             # TR_NF_ENTRADA_PRODUTO_NF acumula total/peso/IPI a cada item:
             # zerados aqui, acertados no UPDATE após os itens.
             0.0, t.get('vICMS', 0.0), 0.0,
             0.0, 0.0,
-            emp, fil, len(n['parcelas']), n['chave'][:44], n['hora_emissao'],
+            emp, fil, qtde_parc, n['chave'][:44], n['hora_emissao'],
             # NFE_EMITIDO = 'S' porque só importamos emissão própria: no ERP
             # 'S' acompanha NFE_TIPO_EMISSAO='P' e 'N' acompanha 'T'. Sem isso a
             # nota aparece como INCOMPLETA na tela de notas de entrada.
@@ -2027,13 +2222,13 @@ class TelaImportacaoNFe(ttk.Frame):
             (erp.get('cf_endereco') or n['contraparte'].get('endereco') or '')[:50],
             (erp.get('cf_bairro') or n['contraparte'].get('bairro') or '')[:20],
             str(erp.get('cf_cep') or n['contraparte'].get('cep') or '')[:15],
-            erp.get('cf_cidade_empresa') or emp, erp.get('cf_cidade_filial') or fil,
-            erp.get('cf_cidade'),
+            erp.get('cf_cidade_empresa') or empc, erp.get('cf_cidade_filial') or filc,
+            erp.get('cf_cidade'),      # NFE_CID_* -> TABELA_CIDADE
             (n.get('inf_cpl') or '')[:1000], (n.get('protocolo') or '')[:20],
-            emp, fil, vend,
-            emp, fil, lc,
-            emp, fil,
-            emp, fil, emp, fil,
+            empc, filc, vend,          # NFE_VENDEDOR_*
+            empc, filc, lc,            # NFE_LOC_COBR_* -> TABELA_LOCAL_COBRANCA
+            empc, filc,                # NFE_COBRADOR_* -> TABELA_CLI_FOR
+            empc, filc, empc, filc,    # NFE_SEGMENTO_* e NFE_TF_* (TIPO_FLUXO)
             USUARIO_PADRAO, USUARIO_PADRAO, ult_grav,
         ])
 
@@ -2055,8 +2250,8 @@ class TelaImportacaoNFe(ttk.Frame):
                 ) VALUES (?,?,?, ?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?,
                           ?,?, ?,?, 1{vals_zero})
             """, [
-                emp, fil, lan, emp, fil, forn,
-                item['n_item'], emp, fil, prod,
+                emp, fil, lan, empc, filc, forn,     # FK -> TABELA_NF_ENTRADA
+                item['n_item'], empc, filc, prod,    # NFP_PRODUTO_* -> TABELA_PRODUTO
                 (item.get('x_prod') or '')[:60], (item.get('u_com') or 'UN')[:2],
                 n['data_emissao'],
                 item.get('q_com', 0.0), item.get('q_com', 0.0),
@@ -2065,7 +2260,7 @@ class TelaImportacaoNFe(ttk.Frame):
                 item.get('v_bc_icms', 0.0), item.get('v_icms', 0.0),
                 item.get('p_ipi', 0.0), item.get('v_ipi', 0.0),
                 str(item.get('pis_cst') or '')[:3], str(item.get('cofins_cst') or '')[:3],
-                emp, fil,
+                emp, fil,          # NFP_ESTOQUE_* (sem FK): filial do movimento
             ])
 
         cur.execute("""
@@ -2076,7 +2271,8 @@ class TelaImportacaoNFe(ttk.Frame):
               AND NFE_FORNECEDOR_EMPRESA = ? AND NFE_FORNECEDOR_FILIAL = ?
               AND NFE_FORNECEDOR = ?
         """, [t.get('vNF', 0.0), t.get('vProd', 0.0), t.get('vIPI', 0.0),
-              t.get('pesoB', 0.0), t.get('pesoL', 0.0), emp, fil, lan, emp, fil, forn])
+              t.get('pesoB', 0.0), t.get('pesoL', 0.0),
+              emp, fil, lan, empc, filc, forn])
 
         obs = (n.get('inf_cpl') or '').strip()
         if obs:
@@ -2086,10 +2282,18 @@ class TelaImportacaoNFe(ttk.Frame):
                     NFOBS_FORNECEDOR_EMPRESA, NFOBS_FORNECEDOR_FILIAL, NFOBS_FORNECEDOR,
                     NFOBS_OBS, NFOBS_USUARIO_INCL
                 ) VALUES (?,?,?, ?,?,?, ?,?)
-            """, [emp, fil, lan, emp, fil, forn, obs[:200], USUARIO_PADRAO])
+            """, [emp, fil, lan, empc, filc, forn, obs[:200], USUARIO_PADRAO])
 
         if gerar_fin and n['parcelas']:
-            for i, p in enumerate(n['parcelas'], start=1):
+            # mesma regra da saída: a soma tem de fechar com o total que o ERP
+            # calculou, senão a nota não imprime
+            cur.execute("SELECT NFE_TOTAL_NOTA FROM TABELA_NF_ENTRADA "
+                        "WHERE NFE_EMPRESA = ? AND NFE_FILIAL = ? AND NFE_LANCAMENTO = ? "
+                        "AND NFE_FORNECEDOR_EMPRESA = ? AND NFE_FORNECEDOR_FILIAL = ? "
+                        "AND NFE_FORNECEDOR = ?", [emp, fil, lan, empc, filc, forn])
+            total_erp = float(cur.fetchone()[0] or 0.0)
+            valores = self._valores_parcelas(n, total_erp, log)
+            for i, (p, val) in enumerate(zip(n['parcelas'], valores), start=1):
                 venc = self._data_iso(p.get('d_venc')) or n['data_emissao']
                 cur.execute("""
                     INSERT INTO TABELA_NF_ENTRADA_PARCELA (
@@ -2098,21 +2302,25 @@ class TelaImportacaoNFe(ttk.Frame):
                         NFPARC_PARCELA, NFPARC_QTDE_DIAS, NFPARC_DATA_PARCELA,
                         NFPARC_VALOR_PARCELA, NFPARC_USUARIO_INCL, NFPARC_ULT_GRAVACAO
                     ) VALUES (?,?,?, ?,?,?, ?,?,?, ?,?,?)
-                """, [emp, fil, lan, emp, fil, forn, i, int(p.get('dias') or 0), venc,
-                      float(p.get('v_dup') or 0.0), USUARIO_PADRAO, ult_grav])
-            self._gravar_titulo_pagar(cur, n, forn, emp, fil, dados, ult_grav, log)
-        self._cc_nota_entrada(cur, emp, fil, lan, forn, t.get('vNF', 0.0))
+                """, [emp, fil, lan, empc, filc, forn, i, int(p.get('dias') or 0), venc,
+                      val, USUARIO_PADRAO, ult_grav])
+            self._gravar_titulo_pagar(cur, n, forn, emp, fil, dados, ult_grav, log,
+                                      valores)
+        self._cc_nota_entrada(cur, emp, fil, lan, forn, t.get('vNF', 0.0), empc, filc)
         log.append(f"✅ NF {n['nro_nf']}/{n['serie']} ENTRADA -> NFE_LANCAMENTO {lan}, "
                    f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}")
 
-    def _gravar_titulo_pagar(self, cur, n, forn, emp, fil, dados, ult_grav, log):
+    def _gravar_titulo_pagar(self, cur, n, forn, emp, fil, dados, ult_grav, log, valores):
+        empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
         cod_tit = str(n['nro_nf']).lstrip('0') or '0'
         serie = str(n['serie']).strip().upper()[:3]
         if (cod_tit, serie, forn) in dados['tit_pag']:
             log.append(f"   ⚠ título {cod_tit}/{serie} já existe no Pagar — "
                        f"parcelas da nota gravadas, título NÃO duplicado")
             return
-        total = sum(float(p.get('v_dup') or 0.0) for p in n['parcelas'])
+        # os mesmos valores gravados nas parcelas da nota, para o título não
+        # divergir dela por causa do acerto do último centavo
+        total = round(sum(valores), 2)
         venc1 = self._data_iso(n['parcelas'][0].get('d_venc')) or n['data_emissao']
         dias1 = int(n['parcelas'][0].get('dias') or 0)
         cur.execute("""
@@ -2125,11 +2333,13 @@ class TelaImportacaoNFe(ttk.Frame):
                 TIT_TOTAL, TIT_TOTAL_CC, TIT_TOTAL_CONTABIL, TIT_TOTAL_PARCELAS,
                 TIT_USUARIO, TIT_ULT_GRAVACAO
             ) VALUES (?,?,?,?, ?,?,?, ?,?,?,?,2, ?,?,?,?,?, ?,?,0, ?,?,?,?, ?,?)
-        """, [emp, fil, cod_tit, serie, emp, fil, forn,
-              n['data_emissao'], n['data_emissao'], emp, fil,
+        """, [emp, fil, cod_tit, serie,
+              empc, filc, forn,        # TIT_FORNECEDOR_* -> TABELA_CLI_FOR
+              n['data_emissao'], n['data_emissao'], empc, filc,   # TIT_TL_*
               len(n['parcelas']), venc1, dias1, ORIGEM_IMPORTACAO, total,
-              emp, fil, total, total, total, total, USUARIO_PADRAO, ult_grav])
-        for i, p in enumerate(n['parcelas'], start=1):
+              empc, filc,              # TIT_MOEDA_* -> TABELA_MOEDA
+              total, total, total, total, USUARIO_PADRAO, ult_grav])
+        for i, (p, val) in enumerate(zip(n['parcelas'], valores), start=1):
             venc = self._data_iso(p.get('d_venc')) or n['data_emissao']
             cur.execute("""
                 INSERT INTO TABELA_TITULO_PARCELA (
@@ -2141,12 +2351,13 @@ class TelaImportacaoNFe(ttk.Frame):
                     TPARC_DESCONTO, TPARC_JUROS, TPARC_CORRECAO, TPARC_ORIGEM,
                     TPARC_ULT_GRAVACAO, TPARC_LIBERADO
                 ) VALUES (?,?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?, 0,0,0,'N', 0,0,0,?, ?,'S')
-            """, [emp, fil, cod_tit, serie, i, emp, fil, forn,
+            """, [emp, fil, cod_tit, serie, i,
+                  empc, filc, forn,    # TPARC_FORNECEDOR_* -> TABELA_CLI_FOR
                   n['data_emissao'], int(p.get('dias') or 0), venc,
-                  emp, fil, float(p.get('v_dup') or 0.0), float(p.get('v_dup') or 0.0),
+                  empc, filc, val, val,     # TPARC_MOEDA_*
                   ORIGEM_IMPORTACAO, ult_grav])
         self._rateio_titulo_pagar(cur, emp, fil, cod_tit, serie, forn,
-                                  n['data_emissao'], total)
+                                  n['data_emissao'], total, empc, filc)
         log.append(f"   💰 título {cod_tit}/{serie} no Pagar, "
                    f"{len(n['parcelas'])} parcela(s), {self._brl(total)}")
 

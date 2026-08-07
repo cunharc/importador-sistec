@@ -382,7 +382,8 @@ class TelaNFe(ttk.Frame):
         corpo.pack(fill=tk.BOTH, expand=True)
 
         # -------- MENU LATERAL (padrão do main) --------
-        sidebar = tema.montar_sidebar(corpo)
+        self.sidebar = tema.montar_sidebar(corpo, tema.largura_sidebar(self))
+        sidebar = self.sidebar
 
         # Rodapé do menu: Voltar
         rodape_sb = tk.Frame(sidebar, bg=tema.SIDEBAR_BG)
@@ -402,9 +403,23 @@ class TelaNFe(ttk.Frame):
         self.btn_importar.config(state=tk.DISABLED)
         self.btn_importar.pack(fill=tk.X)
 
+        # O menu tem largura fixa (pack_propagate(False)); se o maior rótulo pedir
+        # mais, ele fica cortado. 'Importar Selecionados' pedia 211px num menu de
+        # 210 — um pixel. Em vez de chutar outro número, o menu passa a caber o
+        # maior botão, e continua assim se algum rótulo mudar.
+        preciso = max(b.winfo_reqwidth()
+                      for b in (self.btn_voltar, self.btn_analisar,
+                                self.btn_limpar, self.btn_importar))
+        if preciso > int(sidebar.cget('width')):
+            sidebar.config(width=preciso)
+
         # -------- CONTEÚDO --------
+        # A tela roda em console de servidor (1024x768 é comum). O padding de 16
+        # de cada lado eram 32px roubados da grade; num monitor apertado isso é
+        # uma coluna inteira.
+        pad = 16 if self.winfo_screenwidth() >= 1300 else 6
         content = tk.Frame(corpo, bg=tema.BG_BASE)
-        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=16, pady=12)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=pad, pady=(8 if pad > 6 else 4))
 
         # === PARAMETERS BAR ===
         param_bar = ttk.Frame(content)
@@ -423,38 +438,56 @@ class TelaNFe(ttk.Frame):
         file_row.pack(fill=tk.X, pady=4)
 
         tk.Label(file_row, text="XMLs:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
-        self.ent_pasta = ttk.Entry(file_row, font=("Segoe UI", 9))
-        self.ent_pasta.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
+        # Os botões entram ANTES do campo, ancorados à direita: quem cede largura
+        # é o caminho da pasta (que já tem tooltip e rola), não o botão. Com o
+        # campo empacotado primeiro, uma janela estreita cortava o 'Arquivos'.
+        self.btn_add_xml = ttk.Button(file_row, text="📄 Arquivos", command=self._selecionar_arquivos)
+        self.btn_add_xml.pack(side=tk.RIGHT, padx=2)
 
         self.btn_add_pasta = ttk.Button(file_row, text="📁 Pasta", command=self._selecionar_pasta)
-        self.btn_add_pasta.pack(side=tk.LEFT, padx=2)
+        self.btn_add_pasta.pack(side=tk.RIGHT, padx=2)
 
-        self.btn_add_xml = ttk.Button(file_row, text="📄 Arquivos", command=self._selecionar_arquivos)
-        self.btn_add_xml.pack(side=tk.LEFT, padx=2)
+        self.ent_pasta = ttk.Entry(file_row, font=("Segoe UI", 9))
+        self.ent_pasta.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
 
         # === PROGRESS + TOTAL ===
         info_row = ttk.Frame(content)
         info_row.pack(fill=tk.X, pady=2)
 
+        # mesma ordem do file_row: o texto do total é reservado primeiro e a
+        # barra de progresso fica com o que sobrar
+        self.lbl_total = ttk.Label(info_row, text="Total: 0 arquivo(s)",
+                                   font=("Segoe UI", 10, "bold"), foreground="#14146E")
+        self.lbl_total.pack(side=tk.RIGHT, padx=5)
+
         self.progresso = ttk.Progressbar(info_row, orient=tk.HORIZONTAL, mode='determinate')
         self.progresso.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
 
-        self.lbl_total = ttk.Label(info_row, text="Total: 0 arquivo(s)", font=("Segoe UI", 10, "bold"), foreground="#14146E")
-        self.lbl_total.pack(side=tk.RIGHT, padx=5)
-
         # === FILTERS BAR ===
-        filter_bar = ttk.Frame(content)
+        # BarraFluida: cada botão é uma célula do grid e o número de colunas é
+        # recalculado no <Configure>. Numa janela estreita a barra quebra em duas
+        # linhas em vez de jogar os últimos botões para fora da tela.
+        filter_bar = tema.BarraFluida(content, "Filtros")
         filter_bar.pack(fill=tk.X, pady=4)
-
-        tk.Label(filter_bar, text="Filtros:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 5))
-        ttk.Button(filter_bar, text="Tipo", command=lambda: self._abrir_filtro('TIPO')).pack(side=tk.LEFT, padx=2)
-        ttk.Button(filter_bar, text="Cond. Pgto.", command=lambda: self._abrir_filtro('CONDIÇÃO PGTO')).pack(side=tk.LEFT, padx=2)
-        ttk.Button(filter_bar, text="Status", command=lambda: self._abrir_filtro('STATUS')).pack(side=tk.LEFT, padx=2)
-        ttk.Button(filter_bar, text="✕ Limpar Filtros", command=self._limpar_filtros).pack(side=tk.LEFT, padx=10)
+        for texto, cmd in (("Tipo", lambda: self._abrir_filtro('TIPO')),
+                           ("Cond. Pgto.", lambda: self._abrir_filtro('CONDIÇÃO PGTO')),
+                           ("Status", lambda: self._abrir_filtro('STATUS')),
+                           ("✕ Limpar Filtros", self._limpar_filtros)):
+            ttk.Button(filter_bar.grupo(), text=texto, command=cmd).pack()
+        filter_bar.montar()
 
         # === TREEVIEW ===
+        # grid em vez de pack: com as duas barras de rolagem no pack, a horizontal
+        # empurrava a grade e a vertical ficava fora do canto.
+        #
+        # ORDEM DE EMPACOTAMENTO: a barra de ações e o log são criados aqui mas
+        # empacotados ao rodapé ANTES da grade (ver o final deste método). No pack
+        # do Tk quem é empacotado primeiro reserva o seu espaço; com a grade
+        # primeiro, numa janela de 700px de altura o log era empurrado para fora
+        # da tela — os botões voltavam, mas o log sumia.
         frame_grade = ttk.Frame(content)
-        frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
+        frame_grade.rowconfigure(0, weight=1)
+        frame_grade.columnconfigure(0, weight=1)
 
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
 
@@ -471,44 +504,86 @@ class TelaNFe(ttk.Frame):
         self.tree.bind("<ButtonRelease-1>", self._toggle_checkbox)
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scroll_y.set)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        # As 9 colunas somam ~1.140px. Sem barra horizontal, numa janela de 1024
+        # as últimas (CÓD. ANTERIOR, CONDIÇÃO PGTO, STATUS) ficavam inalcançáveis
+        # e sem nenhum sinal de que existiam.
+        scroll_x = ttk.Scrollbar(frame_grade, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscroll=scroll_y.set, xscroll=scroll_x.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
 
         # === ACTIONS BAR ===
-        actions_row = ttk.Frame(content)
-        actions_row.pack(fill=tk.X, pady=4)
+        # Era aqui que a tela quebrava: 6 controles com side=LEFT numa linha só,
+        # e em 1024px o 'Aplicar aos ☑' e o checkbox de condição de pagamento
+        # saíam pela direita, sem scroll e sem pista de que estavam lá.
+        actions_row = tema.BarraFluida(content, "Ações da lista")
 
-        ttk.Button(actions_row, text="☑ Marcar Novos", command=self._marcar_novos).pack(side=tk.LEFT, padx=3)
-        ttk.Button(actions_row, text="☐ Desmarcar Todos", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
-        btn_rem_consumidor = ttk.Button(actions_row, text="🧹 Remover Consumidor", command=self._remover_consumidor)
-        btn_rem_consumidor.pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions_row.grupo(), text="☑ Marcar Novos",
+                   command=self._marcar_novos).pack()
+        ttk.Button(actions_row.grupo(), text="☐ Desmarcar Todos",
+                   command=self._desmarcar_todos).pack()
+        btn_rem_consumidor = ttk.Button(actions_row.grupo(), text="🧹 Remover Consumidor",
+                                        command=self._remover_consumidor)
+        btn_rem_consumidor.pack()
         ToolTip(btn_rem_consumidor, "Remove da lista os registros cuja Razão Social seja\n'CONSUMIDOR', 'CONSUMIDOR FINAL', etc. (comum em NFC-e).")
-        ttk.Button(actions_row, text="📊 Conciliação", command=self._abrir_conciliacao).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions_row.grupo(), text="📊 Conciliação",
+                   command=self._abrir_conciliacao).pack()
 
-        ttk.Separator(actions_row, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=5, fill=tk.Y)
-        tk.Label(actions_row, text="Tipo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(2, 2))
-        self.cb_tipo_lote = ttk.Combobox(actions_row, values=tipo_cadastro.TIPOS,
+        # Tipo + Aplicar andam juntos: são um controle só, não podem cair em
+        # linhas diferentes.
+        g_tipo = actions_row.grupo()
+        tema.rotulo_campo(g_tipo, "Tipo:").pack(side=tk.LEFT, padx=(0, 4))
+        self.cb_tipo_lote = ttk.Combobox(g_tipo, values=tipo_cadastro.TIPOS,
                                          state="readonly", width=20, font=("Segoe UI", 9))
         self.cb_tipo_lote.set(tipo_cadastro.CLIENTE)
-        self.cb_tipo_lote.pack(side=tk.LEFT, padx=2)
-        btn_tipo = ttk.Button(actions_row, text="Aplicar aos ☑", command=self._aplicar_tipo_marcados)
-        btn_tipo.pack(side=tk.LEFT, padx=3)
+        self.cb_tipo_lote.pack(side=tk.LEFT)
+        btn_tipo = ttk.Button(g_tipo, text="Aplicar aos ☑", command=self._aplicar_tipo_marcados)
+        btn_tipo.pack(side=tk.LEFT, padx=(4, 0))
         ToolTip(btn_tipo, "Define cliente / fornecedor / os dois / outros nos registros marcados.\n"
                           "Também dá para clicar direto na coluna TIPO de uma linha para alternar.")
 
         self.var_auto_criar_cond_pagto = tk.BooleanVar(self, value=True)
-        chk_auto = ttk.Checkbutton(actions_row, text="Criar Cond. Pgto. Automaticamente",
-                                    variable=self.var_auto_criar_cond_pagto,
-                                    onvalue=True, offvalue=False)
-        chk_auto.pack(side=tk.LEFT, padx=3)
+        chk_auto = ttk.Checkbutton(actions_row.grupo(), text="Criar Cond. Pgto. Automaticamente",
+                                   variable=self.var_auto_criar_cond_pagto,
+                                   onvalue=True, offvalue=False)
+        chk_auto.pack()
         ToolTip(chk_auto, "Se marcado: Cria condições de pagamento inexistentes automaticamente no banco.\nSe desmarcado: Abre janela para vincular as condições do XML com as já existentes.")
+        actions_row.montar()
 
         # === LOG ===
         log_frame = ttk.LabelFrame(content, text="Log de Importação", padding="5")
-        log_frame.pack(fill=tk.X, pady=(4, 0))
-        self.txt_log = tk.Text(log_frame, height=5, state=tk.DISABLED, bg="#F9F9F9", font=("Segoe UI", 9))
+        self.txt_log = tk.Text(log_frame, height=5, state=tk.DISABLED, bg="#F9F9F9",
+                               font=("Segoe UI", 9))
         self.txt_log.pack(fill=tk.X)
+
+        # Rodapé primeiro (de baixo para cima), grade por último: assim o log e os
+        # botões têm a sua altura garantida e é a GRADE que encolhe.
+        log_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
+        actions_row.pack(side=tk.BOTTOM, fill=tk.X, pady=4)
+        frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
+        # O log fixo em 5 linhas comia a grade quando a janela encurtava; quem
+        # está conferindo a lista quer ver linhas, não área de log vazia.
+        self.bind("<Configure>", self._ajustar_layout)
+
+    def _ajustar_layout(self, _evt=None):
+        """Ajusta ao tamanho da JANELA: altura do log e largura do menu.
+
+        Chamado a cada <Configure>, então só escreve quando o alvo muda — do
+        contrário cada reconfiguração dispara outro <Configure> e o Tk entra em
+        laço.
+        """
+        if not self.winfo_exists():
+            return
+        h, w = self.winfo_height(), self.winfo_width()
+        alvo_log = 2 if h < 720 else (3 if h < 900 else 5)
+        if getattr(self, '_altura_log', None) != alvo_log:
+            self._altura_log = alvo_log
+            self.txt_log.config(height=alvo_log)
+        # O menu NÃO encolhe com a janela: a 168px o rótulo "Importar Selecionados"
+        # ficava cortado — troquei 42px de grade por um botão ilegível. Os 210px
+        # são a largura de que o maior rótulo precisa.
+        del w
 
     def _toggle_checkbox(self, event):
         """Inverte o valor do checkbox se o usuário clicar na primeira coluna."""
