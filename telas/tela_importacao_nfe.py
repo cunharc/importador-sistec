@@ -404,26 +404,56 @@ class TelaImportacaoNFe(ttk.Frame):
     # -------------------------------------------------------------- CONFIG
     SECAO = 'IMPORTACAO_NFE'
 
+    def _id_banco(self):
+        """Identifica a conexão atual, para saber quando o banco foi trocado."""
+        return (f"{self.config_db.get('host', '')}/{self.config_db.get('port', '')}:"
+                f"{self.config_db.get('database', '')}").upper()
+
+    def _aplicar_primeira_filial(self):
+        """Põe empresa/filial na primeira filial cadastrada no banco conectado."""
+        try:
+            with FirebirdService(self.config_db) as fb:
+                r = fb.query("SELECT FIRST 1 FILIAL_EMPRESA E, FILIAL_CODIGO F "
+                             "FROM TABELA_FILIAL ORDER BY FILIAL_EMPRESA, FILIAL_CODIGO")
+        except Exception:
+            return
+        if not r:
+            return
+        for ent, valor in ((self.ent_empresa, r[0]['e']), (self.ent_filial, r[0]['f']),
+                           (self.ent_empresa_cad, r[0]['e']), (self.ent_filial_cad, r[0]['f'])):
+            ent.delete(0, tk.END)
+            ent.insert(0, str(valor))
+
     def _carregar_config(self):
         s = self.SECAO
+        # O que está guardado na seção — pasta dos XMLs, CNPJ, empresa/filial,
+        # local de cobrança, vendedor, centro de custo e conta — é tudo de UM
+        # cliente. Apontar o config.ini para outro banco (o normal na
+        # implantação) e reabrir a tela trazia essas escolhas do cliente
+        # anterior: a filial salva não existe no banco novo, nada é encontrado,
+        # e a tela mostra o CNPJ e o vendedor da outra base como se fossem daqui.
+        # Só as preferências de comportamento atravessam a troca de banco.
+        mesmo_banco = (self.config.has_section(s)
+                       and self.config.get(s, 'banco', fallback='') == self._id_banco())
         if self.config.has_section(s):
-            pasta = self.config.get(s, 'ultima_pasta', fallback='')
-            if pasta and os.path.isdir(pasta):
-                self.pasta_xml = pasta
-                self.ent_pasta.delete(0, tk.END)
-                self.ent_pasta.insert(0, pasta)
-            self.ent_cnpj.delete(0, tk.END)
-            self.ent_cnpj.insert(0, self.config.get(s, 'cnpj_empresa', fallback=''))
-            for ent, chave, padrao in (
-                    (self.ent_empresa, 'empresa', '1'),
-                    (self.ent_filial, 'filial', '1'),
-                    # sem chave salva, os cadastros ficam na mesma da nota
-                    (self.ent_empresa_cad, 'empresa_cadastros',
-                     self.config.get(s, 'empresa', fallback='1')),
-                    (self.ent_filial_cad, 'filial_cadastros',
-                     self.config.get(s, 'filial', fallback='1'))):
-                ent.delete(0, tk.END)
-                ent.insert(0, self.config.get(s, chave, fallback=padrao))
+            if mesmo_banco:
+                pasta = self.config.get(s, 'ultima_pasta', fallback='')
+                if pasta and os.path.isdir(pasta):
+                    self.pasta_xml = pasta
+                    self.ent_pasta.delete(0, tk.END)
+                    self.ent_pasta.insert(0, pasta)
+                self.ent_cnpj.delete(0, tk.END)
+                self.ent_cnpj.insert(0, self.config.get(s, 'cnpj_empresa', fallback=''))
+                for ent, chave, padrao in (
+                        (self.ent_empresa, 'empresa', '1'),
+                        (self.ent_filial, 'filial', '1'),
+                        # sem chave salva, os cadastros ficam na mesma da nota
+                        (self.ent_empresa_cad, 'empresa_cadastros',
+                         self.config.get(s, 'empresa', fallback='1')),
+                        (self.ent_filial_cad, 'filial_cadastros',
+                         self.config.get(s, 'filial', fallback='1'))):
+                    ent.delete(0, tk.END)
+                    ent.insert(0, self.config.get(s, chave, fallback=padrao))
             self.var_gerar_fin.set(
                 self.config.get(s, 'gerar_financeiro', fallback='S').upper() == 'S')
             # o fluxo de caixa da natureza acompanha o financeiro por padrão, mas é
@@ -435,13 +465,17 @@ class TelaImportacaoNFe(ttk.Frame):
                                 ).upper() == 'S')
             self.var_nat_contab.set(
                 self.config.get(s, 'nat_contabilidade', fallback='S').upper() == 'S')
-            self.cmb_lc.set(self.config.get(s, 'local_cobranca', fallback=''))
-            self.cmb_vend.set(self.config.get(s, 'vendedor_padrao', fallback=''))
             self.cmb_escopo.set(self.config.get(s, 'escopo', fallback=ESCOPO_SAIDA))
             tipo_salvo = self.config.get(s, 'tipo_cadastro_cf', fallback=TIPO_CF_AUTOMATICO)
             self.cmb_tipo_cf.set(tipo_salvo if tipo_salvo in ([TIPO_CF_AUTOMATICO] + tipo_cadastro.TIPOS)
                                  else TIPO_CF_AUTOMATICO)
-            self._carregar_rateio_do_escopo()
+            if mesmo_banco:
+                self.cmb_lc.set(self.config.get(s, 'local_cobranca', fallback=''))
+                self.cmb_vend.set(self.config.get(s, 'vendedor_padrao', fallback=''))
+                self._carregar_rateio_do_escopo()
+        if not mesmo_banco:
+            # banco novo: a filial vem do próprio cadastro dele
+            self._aplicar_primeira_filial()
         self._carregar_combos_erp()
         self._atualizar_dica_escopo()
         self._atualizar_aviso_cadastros()
@@ -455,6 +489,8 @@ class TelaImportacaoNFe(ttk.Frame):
         s = self.SECAO
         if not self.config.has_section(s):
             self.config.add_section(s)
+        # o banco a que estas escolhas pertencem: reabrir noutro banco as descarta
+        self.config.set(s, 'banco', self._id_banco())
         self.config.set(s, 'ultima_pasta', self.pasta_xml)
         self.config.set(s, 'cnpj_empresa', self.ent_cnpj.get().strip())
         self.config.set(s, 'empresa', self.ent_empresa.get().strip())
@@ -529,6 +565,10 @@ class TelaImportacaoNFe(ttk.Frame):
         self.cmb_conta.set(self.config.get(s, f'conta_contabil_{suf}',
                                            fallback=self.config.get(s, 'conta_contabil',
                                                                     fallback='')))
+        # o guardado pode não existir mais no banco conectado (ver _carregar_config)
+        for cmb in (self.cmb_cc, self.cmb_conta):
+            if cmb.get() and cmb['values'] and cmb.get() not in cmb['values']:
+                cmb.set('')
 
     def _salvar_rateio_do_escopo(self):
         s = self.SECAO
@@ -719,6 +759,12 @@ class TelaImportacaoNFe(ttk.Frame):
         self._conta_reduzido = {int(r['c']): r['r'] for r in contas}
         self.cmb_conta['values'] = ["(nenhuma)"] + [
             f"{r['c']} - {r['ct']} {r['d']}" for r in contas]
+        # Texto que não está mais na lista — registro apagado, filial trocada,
+        # banco trocado — não pode ficar em tela: ele seria gravado na nota como
+        # um código que não existe neste banco.
+        for cmb in (self.cmb_lc, self.cmb_vend, self.cmb_cc, self.cmb_conta):
+            if cmb.get() and cmb.get() not in cmb['values']:
+                cmb.set('')
         if lcs and not self.cmb_lc.get():
             self.cmb_lc.current(0)
         for cmb in (self.cmb_vend, self.cmb_cc, self.cmb_conta):

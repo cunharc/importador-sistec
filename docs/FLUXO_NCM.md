@@ -24,7 +24,7 @@ item_xml = {
     ],
     
     # === ICMS ===
-    'icms_cst': '00',              # CST ICMS
+    'icms_cst': '000',             # CST ICMS com 3 dígitos: orig + CST (CSOSN vai como está)
     'p_icms': 18.0,                # % ICMS
     'p_red_bc': 0.0,              # % Redução Base de Cálculo
     'p_fcp': 0.0,                 # % FCP

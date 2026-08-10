@@ -86,7 +86,14 @@ def _parse_det(det_element: ET.Element) -> Dict[str, Any]:
             icms_node = icms[0] # ICMS00, ICMS10, ICMS40, ICMS_SN101, etc.
             cst = _get(icms_node, 'CST')
             csosn = _get(icms_node, 'CSOSN')
-            item['icms_cst'] = cst if cst else csosn
+            # No XML a origem vem separada (<orig>) e o CST com 2 dígitos; o CST
+            # cheio do ICMS tem 3 (origem + tributação), ex.: orig=0 + CST=20 -> 020.
+            # O CSOSN do Simples já vem com 3 dígitos e não leva a origem na frente.
+            if cst:
+                orig = (_get(icms_node, 'orig') or '0').strip()[-1:] or '0'
+                item['icms_cst'] = f"{orig}{cst.strip().zfill(2)}"
+            else:
+                item['icms_cst'] = csosn
             item['p_icms'] = _get_float(icms_node, 'pICMS')
             item['p_red_bc'] = _get_float(icms_node, 'pRedBC')
             item['p_fcp'] = _get_float(icms_node, 'pFCP')

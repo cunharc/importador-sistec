@@ -32,7 +32,7 @@ def test_parse_nfe_item_data():
 def test_parse_nfe_icms():
     resultado = parse_nfe(CAMINHO_XML)
     item = resultado['itens'][0]
-    assert item['icms_cst'] == '00'
+    assert item['icms_cst'] == '000'   # origem (orig=0) + CST 00
     assert item['p_icms'] == 12.0
 
 def test_parse_nfe_pis_cofins():

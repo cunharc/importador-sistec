@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.11                            │
-│                   Data: 07/08/2026                          │
+│                      VERSÃO 4.12                            │
+│                   Data: 10/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.11 - RELEASE ATUAL (07/08/2026)
+### ✅ VERSÃO 4.12 - RELEASE ATUAL (10/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **CST do ICMS entrava com 2 dígitos.** No XML a origem da mercadoria vem separada (`<orig>`) e o `<CST>` só com os 2 dígitos da tributação; o CST do ICMS tem **3** — origem + tributação. A leitura levava só o `<CST>`, então `NFP_SIT_TRIBUTARIA` era gravado como `20` em vez de `020`. Agora os dois são juntados na origem da leitura (`0` + `20` = `020`, `1` + `00` = `100`, sem `<orig>` no XML assume `0`), e o **CSOSN** do Simples continua como está — já vem com 3 dígitos e não leva origem na frente. Vale para a importação de notas e para as telas que leem o XML (auditorias, ICMS, NCM). **As notas já importadas ficaram com o CST de 2 dígitos e precisam de correção no banco** |
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **Trocar de banco deixava a tela com as escolhas do cliente anterior.** Pasta dos XMLs, CNPJ, empresa/filial, local de cobrança, vendedor, centro de custo e conta são de **um** cliente, mas ficavam guardados soltos no `config.ini`: apontando o sistema para outro banco (o normal na implantação) a filial salva não existia lá, a consulta não devolvia nada, e a tela seguia mostrando o CNPJ e o vendedor da outra base como se fossem daqui — um vendedor desses iria para a nota como código inexistente. Agora essas escolhas ficam **amarradas ao banco** em que foram salvas e são descartadas ao abrir em outro; empresa/filial já entram na **primeira filial cadastrada** no banco conectado, e daí o CNPJ e a razão vêm do próprio cadastro dele. Combo cujo texto não está mais na lista lida do ERP (registro apagado, filial trocada) é limpo em vez de continuar em tela. Escopo, gerar financeiro, flags da natureza e "cadastrar como" atravessam a troca, porque são preferência de uso e não dado de cliente |
+
+### ✅ VERSÃO 4.11 (07/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
