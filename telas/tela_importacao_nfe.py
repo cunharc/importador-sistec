@@ -56,6 +56,9 @@ SERIE_PADRAO = '1'
 ORIGEM_IMPORTACAO = 'IMP'          # NFS_ORIGEM / TIT_ORIGEM (VARCHAR(5))
 USUARIO_PADRAO = 'SISTEC_IMP'
 LOTE_COMMIT = 100
+# É deste generator que o ERP tira o NFS_NUMERO (a chave interna da nota de
+# saída, não o número da NF). Ver _preparar_numeracao.
+GEN_NFS_NUMERO = 'GEN_NFS_NUMERO'
 TAM_OBS = 200                      # NFOBS_OBS1..OBS20 sao VARCHAR(200)
 QTDE_OBS = 20
 
@@ -1970,6 +1973,67 @@ class TelaImportacaoNFe(ttk.Frame):
         cur.execute(sql, params)
         return int(cur.fetchone()[0] or 1)
 
+    # ------------------------------------------- NUMERAÇÃO INTERNA DA SAÍDA
+    def _preparar_numeracao(self, cur, log):
+        """Prepara o GEN_NFS_NUMERO — é dele que o ERP tira o NFS_NUMERO.
+
+        O NFS_NUMERO não é o número da nota fiscal: é a chave interna
+        (NFS_EMPRESA, NFS_FILIAL, NFS_NUMERO) e o ERP a pede ao generator
+        GEN_NFS_NUMERO. Importar com `MAX(NFS_NUMERO) + 1` sem tocar no generator
+        deixava ele parado no valor antigo: depois da importação, a primeira nota
+        emitida no ERP recebia um número que a importação já tinha usado e a
+        gravação morria com "violation of PRIMARY or UNIQUE KEY" (-803) — o ERP
+        "se perdendo" que o cliente relatou. Aqui a base do cliente escapou por
+        sorte (o generator estava em 15001 e a importação usou 1..14014).
+
+        Então: a numeração passa a sair do generator, e antes disso ele é
+        empurrado para frente do MAX real (base que já foi importada por versão
+        anterior tem generator atrasado). O MAX é o da tabela inteira, sem filtrar
+        empresa/filial, porque o generator é um só para todas as filiais.
+
+        Generator inexistente (ERP mais antigo) não é erro: volta para o MAX+1 de
+        antes, avisando no log.
+        """
+        try:
+            cur.execute("SELECT COUNT(*) FROM RDB$GENERATORS "
+                        "WHERE TRIM(RDB$GENERATOR_NAME) = ?", [GEN_NFS_NUMERO])
+            if not int(cur.fetchone()[0] or 0):
+                log.append(f"⚠ {GEN_NFS_NUMERO} não existe neste banco — o número "
+                           f"interno da nota sai do MAX+1")
+                return False
+            cur.execute("SELECT COALESCE(MAX(NFS_NUMERO), 0) FROM TABELA_NF_SAIDA")
+            maximo = int(cur.fetchone()[0] or 0)
+            cur.execute(f"SELECT GEN_ID({GEN_NFS_NUMERO}, 0) FROM RDB$DATABASE")
+            atual = int(cur.fetchone()[0] or 0)
+            if atual < maximo:
+                cur.execute(f"SELECT GEN_ID({GEN_NFS_NUMERO}, {maximo - atual}) "
+                            f"FROM RDB$DATABASE")
+                cur.fetchone()
+                log.append(f"   {GEN_NFS_NUMERO} estava em {atual} com nota até "
+                           f"{maximo} no banco — adiantado para {maximo}, senão o "
+                           f"ERP repetiria número já usado")
+            else:
+                log.append(f"   {GEN_NFS_NUMERO} em {atual} (maior NFS_NUMERO no "
+                           f"banco: {maximo}) — a numeração sai dele")
+            return True
+        except Exception as e:
+            log.append(f"⚠ não foi possível usar o {GEN_NFS_NUMERO} ({e}) — o número "
+                       f"interno da nota sai do MAX+1")
+            return False
+
+    def _numero_saida(self, cur, emp, fil):
+        """Próximo NFS_NUMERO. Do generator, como o ERP; MAX+1 é só o plano B.
+
+        GEN_ID não é transacional: nota que dá erro e volta pelo savepoint queima
+        o número e deixa lacuna. Lacuna é inofensiva — número repetido não.
+        """
+        if getattr(self, '_usa_gen_nfs', False):
+            cur.execute(f"SELECT GEN_ID({GEN_NFS_NUMERO}, 1) FROM RDB$DATABASE")
+            return int(cur.fetchone()[0])
+        cur.execute("SELECT COALESCE(MAX(NFS_NUMERO), 0) + 1 FROM TABELA_NF_SAIDA "
+                    "WHERE NFS_EMPRESA = ? AND NFS_FILIAL = ?", [emp, fil])
+        return int(cur.fetchone()[0])
+
     def _importacao_bg(self, marcadas):
         emp, fil = self.analise['emp'], self.analise['fil']
         dados = self.analise['dados']
@@ -1981,6 +2045,9 @@ class TelaImportacaoNFe(ttk.Frame):
         try:
             with FirebirdService(self.config_db) as fb:
                 cur = fb.conn.cursor()
+                # a numeração da saída sai do generator do ERP; conferido uma vez
+                # por rodada, antes da primeira nota
+                self._usa_gen_nfs = self._preparar_numeracao(cur, log)
                 total = len(marcadas)
                 for idx, f in enumerate(marcadas):
                     n = f['nota']
@@ -2371,9 +2438,7 @@ class TelaImportacaoNFe(ttk.Frame):
         empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
         cli = f['contraparte_cod']
         erp = dados['clientes'].get((n.get('contraparte') or {}).get('documento', ''), {})
-        cur.execute("SELECT COALESCE(MAX(NFS_NUMERO), 0) + 1 FROM TABELA_NF_SAIDA "
-                    "WHERE NFS_EMPRESA = ? AND NFS_FILIAL = ?", [emp, fil])
-        num = int(cur.fetchone()[0])
+        num = self._numero_saida(cur, emp, fil)
         t = n['totais']
         tr = n['transporte']
         cfop_primeiro = (n['itens'][0].get('cfop') if n['itens'] else '') or ''

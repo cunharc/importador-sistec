@@ -3,14 +3,20 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.17                            │
+│                      VERSÃO 4.18                            │
 │                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.17 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.18 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **A numeração interna da nota não saía do generator do ERP — depois da importação o ERP repetia número e travava.** O `NFS_NUMERO` não é o número da nota fiscal: é a chave interna (`NFS_EMPRESA`, `NFS_FILIAL`, `NFS_NUMERO`) e o ERP a pede ao generator **`GEN_NFS_NUMERO`**. A importação usava `MAX(NFS_NUMERO) + 1` e **não mexia no generator**: ele ficava parado no valor antigo e a primeira nota emitida no ERP depois da importação recebia um número já ocupado, morrendo com *violation of PRIMARY or UNIQUE KEY* (-803). Na base do cliente escapou por sorte — o generator estava em **15001** e a importação ocupou **1 a 14014**; num banco novo, com o generator em 0, a próxima venda quebra na hora. Agora **o número sai do generator**, como no ERP, e antes da primeira nota o generator é **empurrado para frente do MAX real** (base já importada por versão anterior tem generator atrasado), com o que aconteceu registrado no log: `GEN_NFS_NUMERO estava em 0 com nota até 14014 no banco — adiantado para 14014`. O MAX é o da tabela inteira, sem filtrar empresa/filial, porque o generator é um só para todas as filiais. Lacuna na numeração é esperada e inofensiva (`GEN_ID` não é transacional: nota que dá erro e volta pelo savepoint queima o número) — número repetido é que não pode. ERP antigo sem o generator, ou sem permissão nele, não vira erro: volta ao `MAX+1` de antes avisando no log. **A entrada segue no `MAX(NFE_LANCAMENTO) + 1`**: não existe generator para ela neste ERP. E o item da nota (`NFP_LANCAMENTO`) continua reiniciando em 1 por nota, confirmado na nota que o próprio ERP emitiu |
+
+### ✅ VERSÃO 4.17 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
