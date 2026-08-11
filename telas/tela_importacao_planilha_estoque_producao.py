@@ -514,11 +514,22 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
             return 1
         return n
 
-    def _chaves_produto(self, valor):
+    def _chaves_produto(self, valor, degradar=True):
         """Formas de busca de um código de produto vindo da planilha/ERP.
 
         Trata célula numérica do Excel ('10000.0' -> '10000'), zeros à esquerda,
         separador de milhar e códigos alfanuméricos (COD_IMPORTACAO é VARCHAR).
+
+        `degradar=False` deixa de fora a última forma, "só os dígitos". Ela é uma
+        chave DEGRADADA e só pode ser confrontada com o valor EXATO do outro lado
+        — nunca com a degradação do outro lado. Indexando o ERP com ela, códigos
+        que diferem apenas nas letras passavam a dividir a mesma chave: `MCC600`
+        (Maiale Canastra) e `BKC600` (Berkshire) viravam ambos '600', e o `MDC600`
+        do XML (Maiale Duroc, um terceiro produto) casava com os dois —
+        *AMBÍGUO (2: 207, 307)*, um empate que não existe. Pior: com só um deles
+        cadastrado não haveria empate nenhum e a nota entraria calada no produto
+        errado. Nessas linhas as letras são a linha do produto, não enfeite: os
+        códigos terminados em `000` (SNV000, CSR000, KIT000) colidiam todos.
         """
         s = str(valor if valor is not None else '').strip().upper()
         if not s:
@@ -542,16 +553,21 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
             add(re.sub(r'[.,]', '', s))
         # 3) o valor exatamente como veio (COD_IMPORTACAO/AUXILIAR sao VARCHAR)
         add(s)
-        # 4) por ultimo, so os digitos (tolera 'AB-12' -> '12')
-        somente_digitos = re.sub(r'\D', '', s)
-        if somente_digitos:
-            add(somente_digitos)
+        # 4) por ultimo, so os digitos (tolera 'AB-12' -> '12'). Fora do indice.
+        if degradar:
+            somente_digitos = re.sub(r'\D', '', s)
+            if somente_digitos:
+                add(somente_digitos)
         return formas
 
     def _indexar_produtos(self, rows):
         """Monta um índice por código do ERP, por código de importação e por auxiliar.
 
         Cada chave guarda a lista de produtos que a possuem, para detectar ambiguidade.
+
+        O índice guarda só as formas FIÉIS do código (`degradar=False`): a forma
+        "só os dígitos" existe para o lado da busca e, dos dois lados, produzia
+        empate entre produtos de linhas diferentes (ver `_chaves_produto`).
         """
         indices = {'codigo': {}, 'importacao': {}, 'auxiliar': {}}
         for r in rows:
@@ -569,7 +585,7 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
             for campo, bruto in (('codigo', codigo),
                                  ('importacao', info['cod_importacao']),
                                  ('auxiliar', info['cod_auxiliar'])):
-                for chave in self._chaves_produto(bruto):
+                for chave in self._chaves_produto(bruto, degradar=False):
                     lista = indices[campo].setdefault(chave, [])
                     if all(x['codigo'] != codigo for x in lista):
                         lista.append(info)
@@ -600,6 +616,7 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
         chaves = self._chaves_produto(valor)
         if not chaves:
             return None, None, None
+        exatas = set(self._chaves_produto(valor, degradar=False))
         for chave in chaves:
             for campo in ordem:
                 achados = indices.get(campo, {}).get(chave)
@@ -611,11 +628,16 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
                 if len(codigos) > 1:
                     return None, campo, codigos
                 escolhido = candidatos[0]
+                if len(achados) > len(candidatos) or chave not in exatas:
+                    escolhido = dict(escolhido)
                 if len(achados) > len(candidatos):
                     # deixa rastro de que houve gêmeo, para o motivo da grade poder dizer
-                    escolhido = dict(escolhido)
                     escolhido['gemeos_inativos'] = sorted(
                         {a['codigo'] for a in achados} - {escolhido['codigo']})
+                if chave not in exatas:
+                    # casou só pelos dígitos ('MDC131' -> 131): é palpite, não
+                    # acerto. Quem olha a grade tem de saber para poder conferir.
+                    escolhido['casou_degradado'] = chave
                 return escolhido, campo, None
         return None, None, None
 

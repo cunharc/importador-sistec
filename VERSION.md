@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.12                            │
-│                   Data: 10/08/2026                          │
+│                      VERSÃO 4.13                            │
+│                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.12 - RELEASE ATUAL (10/08/2026)
+### ✅ VERSÃO 4.13 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais / Estoque de Produção | ✅ PRONTO | 🐞 **Produtos de linhas diferentes casavam entre si e viravam "AMBÍGUO".** A busca de produto tem uma forma degradada *"só os dígitos"* (existe para tolerar `AB-12` → `12`) e ela estava sendo usada **nos dois lados** — na busca *e* no índice do ERP. Aí `MCC600` (Maiale Canastra) e `BKC600` (Berkshire) passavam a dividir a chave `600`, e o `MDC600` do XML (Maiale Duroc, um **terceiro** produto) casava com os dois: *AMBÍGUO (2: 207, 307)*, um empate que não existe. Nos códigos terminados em `000` colidiam em bloco (`SNV000`, `CSR000`, `KIT000`). No banco do cliente eram **315 dos 533 produtos** em 95 grupos, um deles com 9 produtos. E o risco maior nem era o bloqueio: com só **um** produto no grupo não haveria empate nenhum e a nota entraria calada no produto errado. Agora a forma degradada vale só como chave de busca, nunca como chave cadastrada — uma degradação só pode ser confrontada com o valor **exato** do outro lado. Os 533 produtos passaram a se achar exatamente, zero ambíguos; `MDC600` virou `NÃO ENCONTRADO`, que é a verdade (não está cadastrado) e cai no botão de cadastrar. Quando o acerto vem mesmo pela forma degradada, a linha diz `OK (casou só pelos dígitos 131 — confira se é o produto certo)` em âmbar, em vez de se passar por acerto exato |
+| Importação Notas Fiscais   | ✅ PRONTO | **Produto ambíguo de verdade agora se resolve na tela.** Quando o mesmo código está em dois produtos **ativos**, a única saída era inativar um deles no ERP — e quando os dois estão em uso não há o que inativar: um código empatado deixava em `PENDENTE FASES 1-3` **toda** nota que o citasse. **Duplo clique na linha AMBÍGUA da aba 3** abre a escolha entre os produtos em conflito, cada um com código, descrição, situação e os códigos de importação/auxiliar. Escolhido, a linha vira `OK (escolhido na tela: 20000)`, a nota desbloqueia e é esse código que vai para `NFP_PRODUTO`. A escolha vale para todas as notas com aquele código, é guardada no `config.ini` (por banco, então reanalisar não obriga a escolher de novo) e escolha que envelheceu — produto apagado, filial trocada — volta a bloquear em vez de gravar um código inexistente. Desempatar reclassifica na hora, sem reler os XMLs. O motivo da nota deixou de ser genérico: diz `fase 3: produto ambíguo — duplo clique na aba 3 para escolher qual usar (3345)`, separado do `produto não encontrado`, que pede cadastro e não escolha |
+| Importação Notas Fiscais   | ✅ PRONTO | **Copiar a chave da NF-e pelo botão direito** na aba 4 — a chave é o que se leva para fora (consulta no portal da SEFAZ, busca no ERP, `WHERE NFS_CHAVE_DANFE IN (...)`) e antes só dava para lê-la da tela e digitar 44 dígitos à mão. O menu copia também **número/série** e o **CNPJ/CPF da contraparte**, e ainda as chaves de **todas as notas marcadas**, uma por linha, no formato que se cola direto num `IN (...)` ou numa planilha. O clique direito seleciona a linha antes de abrir o menu (não copia da linha errada) e o que foi copiado aparece na barra de status, sem popup no meio do trabalho |
+
+### ✅ VERSÃO 4.12 (10/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
