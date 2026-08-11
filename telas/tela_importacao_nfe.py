@@ -190,6 +190,15 @@ class TelaImportacaoNFe(ttk.Frame):
         self.btn_importar.config(state=tk.DISABLED)
         self.btn_importar.pack(fill=tk.X)
 
+        # Nota que JÁ está no ERP não é reimportada — e as importadas por versões
+        # anteriores entraram sem a situação do documento e sem a data de
+        # cancelamento. Este botão acerta essas, lendo dos mesmos XMLs.
+        self.btn_situacao = tema.botao_sidebar(
+            sidebar, "🚫   Corrigir Situação das Já Importadas",
+            self._iniciar_situacao, cor_fg="#FFB4B4")
+        self.btn_situacao.config(state=tk.DISABLED)
+        self.btn_situacao.pack(fill=tk.X)
+
         self.btn_exportar = tema.botao_sidebar(
             sidebar, "📋   Exportar Análise (CSV)", self._exportar_analise, cor_fg="#8FD8FF")
         self.btn_exportar.config(state=tk.DISABLED)
@@ -1473,6 +1482,8 @@ class TelaImportacaoNFe(ttk.Frame):
         self.btn_analisar.config(state=tk.NORMAL)
         self.btn_cadastrar.config(state=tk.NORMAL)
         self.btn_exportar.config(state=tk.NORMAL)
+        self.btn_situacao.config(
+            state=tk.NORMAL if self._notas_para_situacao(analise) else tk.DISABLED)
         # a grade nasce marcada só no escopo escolhido — o que está marcado é
         # exatamente o que vai ser gravado nesta passada
         self._marcar_pelo_escopo()
@@ -2028,6 +2039,159 @@ class TelaImportacaoNFe(ttk.Frame):
         self.progresso['value'] = 100
         self.lbl_status.config(text="Importação finalizada. Clique em Analisar para reconferir.")
 
+    # ------------------------- CORRIGIR A SITUAÇÃO DAS NOTAS JÁ IMPORTADAS
+    @staticmethod
+    def _notas_para_situacao(analise):
+        """Notas da análise que já estão no ERP e têm chave para localizá-las.
+
+        Existe porque nota que já está no ERP não é reimportada: as importadas por
+        versões anteriores ficaram com NFS_SITD_CODIGO NULL e, quando canceladas,
+        sem NFS_DATA_CANCELA — ou seja, contando como venda boa. A única fonte da
+        situação são os mesmos XMLs, então a correção sai daqui.
+
+        As regulares entram na lista de propósito: o 00 é tão necessário à
+        escrituração quanto o 02.
+        """
+        return [f for f in (analise or {}).get('fase4', [])
+                if f['status'] == 'JÁ IMPORTADA' and (f['nota'].get('chave') or '')]
+
+    def _iniciar_situacao(self):
+        alvo = self._notas_para_situacao(self.analise)
+        if not alvo:
+            return messagebox.showwarning(
+                "Aviso", "Nenhuma nota desta pasta está marcada como JÁ IMPORTADA "
+                         "com chave de NF-e. Nada a corrigir.")
+        por_sit = {}
+        for f in alvo:
+            por_sit[self._sit_documento(f['nota'])] = \
+                por_sit.get(self._sit_documento(f['nota']), 0) + 1
+        detalhe = "\n".join(
+            f"   {sit} {SITD_DESCRICAO.get(sit, 'REGULAR')}: {qtd} nota(s)"
+            for sit, qtd in sorted(por_sit.items()))
+        if not messagebox.askyesno(
+                "Corrigir situação das já importadas",
+                f"{len(alvo)} nota(s) desta pasta já estão no ERP:\n\n{detalhe}\n\n"
+                f"Conferir e acertar no ERP a situação do documento fiscal e, nas "
+                f"canceladas, a data e a justificativa do cancelamento?\n\n"
+                f"Só é alterado o que estiver diferente. Nada mais da nota é "
+                f"tocado: valores, itens, parcelas e títulos ficam como estão.\n\n"
+                f"⚠ Financeiro já gerado para nota cancelada NÃO é apagado — "
+                f"conferir no Receber/Pagar depois."):
+            return
+        self.btn_situacao.config(state=tk.DISABLED)
+        self.btn_analisar.config(state=tk.DISABLED)
+        self.progresso['value'] = 0
+        threading.Thread(target=self._situacao_bg, args=(alvo,), daemon=True).start()
+
+    def _situacao_bg(self, alvo):
+        log = ["--- LOG DE CORRECAO DA SITUACAO DO DOCUMENTO FISCAL ---", ""]
+        corrigidas = iguais = nao_achou = erros = 0
+        try:
+            with FirebirdService(self.config_db) as fb:
+                cur = fb.conn.cursor()
+                total = len(alvo)
+                for idx, f in enumerate(alvo):
+                    n = f['nota']
+                    saida = n['tp_nf'] == 1
+                    rot = f"NF {n['nro_nf']}/{n['serie']} ({f['tipo']})"
+                    if idx % 20 == 0:
+                        pct = int((idx / total) * 100)
+                        self._ui(lambda d=idx, t=total, p=pct: (
+                            self.lbl_status.config(text=f"Conferindo {d + 1}/{t} notas..."),
+                            self.progresso.config(value=p)))
+                    sit = self._sit_documento(n)
+                    data_canc, motivo_canc = self._cancelamento(n)
+                    try:
+                        if saida:
+                            cur.execute(
+                                "SELECT NFS_EMPRESA, NFS_FILIAL, NFS_NUMERO, "
+                                "NFS_SITD_CODIGO, NFS_DATA_CANCELA "
+                                "FROM TABELA_NF_SAIDA WHERE NFS_CHAVE_DANFE = ?",
+                                [n['chave'][:44]])
+                        else:
+                            cur.execute(
+                                "SELECT NFE_EMPRESA, NFE_FILIAL, NFE_LANCAMENTO, "
+                                "NFE_SITD_CODIGO, NFE_DATA_CANCELAMENTO "
+                                "FROM TABELA_NF_ENTRADA WHERE NFE_CHAVE_DANFE = ?",
+                                [n['chave'][:44]])
+                        linhas = cur.fetchall()
+                    except Exception as e:
+                        erros += 1
+                        log.append(f"❌ {rot}: {e}")
+                        continue
+                    if not linhas:
+                        nao_achou += 1
+                        log.append(f"   – {rot}: chave não encontrada no ERP "
+                                   f"(a nota casou por número/série na análise)")
+                        continue
+                    for emp_r, fil_r, num_r, sit_erp, data_erp in linhas:
+                        sets, params, mudou = [], [], []
+                        if str(sit_erp or '').strip() != sit:
+                            sets.append(("NFS_SITD_CODIGO = ?" if saida
+                                         else "NFE_SITD_CODIGO = ?"))
+                            params.append(sit)
+                            mudou.append(f"situação {str(sit_erp or 'NULL').strip()} -> "
+                                         f"{sit} {SITD_DESCRICAO.get(sit, 'REGULAR')}")
+                        # data já preenchida não é sobrescrita: se o ERP registrou o
+                        # cancelamento, a data dele é a boa.
+                        if data_canc and not data_erp:
+                            if saida:
+                                sets.append("NFS_DATA_CANCELA = ?")
+                                params.append(data_canc)
+                                sets.append("NFS_MOTIVO_CANCELA = ?")
+                                params.append(motivo_canc)
+                                sets.append("NFS_USUARIO_CANCELAMENTO = ?")
+                                params.append(USUARIO_PADRAO)
+                            else:
+                                sets.append("NFE_DATA_CANCELAMENTO = ?")
+                                params.append(data_canc)
+                            mudou.append(f"cancelamento em {self._data_br(data_canc)}")
+                        if not sets:
+                            iguais += 1
+                            continue
+                        tabela, chaves = (
+                            ('TABELA_NF_SAIDA',
+                             'NFS_EMPRESA = ? AND NFS_FILIAL = ? AND NFS_NUMERO = ?')
+                            if saida else
+                            ('TABELA_NF_ENTRADA',
+                             'NFE_EMPRESA = ? AND NFE_FILIAL = ? AND NFE_LANCAMENTO = ?'))
+                        try:
+                            cur.execute(
+                                f"UPDATE {tabela} SET {', '.join(sets)} WHERE {chaves}",
+                                params + [emp_r, fil_r, num_r])
+                            corrigidas += 1
+                            log.append(f"✅ {rot} registro {num_r}: "
+                                       + "; ".join(mudou))
+                        except Exception as e:
+                            erros += 1
+                            log.append(f"❌ {rot}: {e}")
+                    if (idx + 1) % LOTE_COMMIT == 0:
+                        try:
+                            fb.conn.commit()
+                            cur = fb.conn.cursor()
+                        except Exception:
+                            pass
+                fb.conn.commit()
+        except Exception as e:
+            msg = str(e)
+            self._ui(lambda: messagebox.showerror(
+                "Erro", f"Falha ao corrigir a situação das notas:\n{msg}"))
+            self._ui(self._pos_situacao)
+            return
+
+        resumo = (f"{corrigidas} nota(s) corrigida(s), {iguais} já estava(m) certa(s), "
+                  f"{nao_achou} não localizada(s) pela chave, {erros} com erro.")
+        log.insert(1, f"RESUMO: {resumo}")
+        self._ui(lambda: messagebox.showinfo("Concluído", resumo))
+        self._ui(lambda: self._oferecer_log(log, "LOG_SITUACAO_NOTAS.txt"))
+        self._ui(self._pos_situacao)
+
+    def _pos_situacao(self):
+        self.btn_analisar.config(state=tk.NORMAL)
+        self.btn_situacao.config(state=tk.NORMAL)
+        self.progresso['value'] = 100
+        self.lbl_status.config(text="Situação conferida. Clique em Analisar para reconferir.")
+
     # ---- helpers do motor
     def _nat_para(self, dados, tipo, cfop):
         """Variação de natureza que a FASE 2 escolheu para este CFOP.
@@ -2101,6 +2265,30 @@ class TelaImportacaoNFe(ttk.Frame):
         recebimento — o cliente teria de sair caçando título fantasma depois.
         """
         return str(nota.get('sit_documento') or '') in (SITD_CANCELADO, SITD_DENEGADA)
+
+    @classmethod
+    def _cancelamento(cls, nota):
+        """(data, motivo) do cancelamento — o que o ERP realmente lê.
+
+        Gravar só o NFS_SITD_CODIGO = '02' não faz a nota aparecer como cancelada
+        no ERP: a tela de notas, o livro fiscal (PROC_LIVRO_SAIDA), o SPED
+        (PROC_COFIS_431/435) e todos os painéis testam `NFS_DATA_CANCELA IS NULL`.
+        Sem a data, a nota cancelada continua contando como venda.
+
+        A data vem do evento de cancelamento (dhRegEvento). Quando o XML do evento
+        não traz carimbo, cai na emissão da nota — data errada por dias é ruim, mas
+        nota cancelada contando como venda é pior. Denegada NÃO entra aqui: ela não
+        foi cancelada, e o ERP tem situação própria (04) para ela.
+        """
+        if cls._sit_documento(nota) != SITD_CANCELADO:
+            return None, None
+        canc = nota.get('cancelamento') or {}
+        data = canc.get('data') or nota.get('data_emissao')
+        motivo = (canc.get('motivo') or '').strip() or 'Cancelamento homologado na SEFAZ'
+        prot = (canc.get('protocolo') or '').strip()
+        if prot:
+            motivo = f"{motivo} (protocolo do evento {prot})"
+        return data, motivo[:400]
 
     def _obs_chunks(self, texto):
         t = (texto or '').strip()
@@ -2210,6 +2398,7 @@ class TelaImportacaoNFe(ttk.Frame):
         # padrão da tela quando o cliente não tem um vinculado.
         lc = getattr(self, '_lc_padrao', None)
         vend = erp.get('cf_representante') or getattr(self, '_vend_padrao', None)
+        data_canc, motivo_canc = self._cancelamento(n)
 
         cur.execute("""
             INSERT INTO TABELA_NF_SAIDA (
@@ -2232,6 +2421,7 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFS_VENDEDOR_EMPRESA, NFS_VENDEDOR_FILIAL, NFS_VENDEDOR,
                 NFS_TRANS_EMPRESA, NFS_TRANS_FILIAL,
                 NFS_SITD_CODIGO,
+                NFS_DATA_CANCELA, NFS_MOTIVO_CANCELA, NFS_USUARIO_CANCELAMENTO,
                 NFS_DIAS_INTERVALO, NFS_VALOR_TROCO
             ) VALUES (?,?,?,?,?,
                       ?,?,?,
@@ -2252,6 +2442,7 @@ class TelaImportacaoNFe(ttk.Frame):
                       ?,?,?,
                       ?,?,
                       ?,
+                      ?,?,?,
                       0,0)
         """, [
             emp, fil, num, n['nro_nf'], str(n['serie'])[:3],
@@ -2288,6 +2479,10 @@ class TelaImportacaoNFe(ttk.Frame):
             # situação do documento fiscal (FK -> TABELA_SIT_DOCUM_FISCAL):
             # cancelada entra como 02, denegada 04, complementar 06. Ficava NULL.
             self._sit_documento(n),
+            # e a data/justificativa do cancelamento, que é por onde o ERP
+            # reconhece a nota como cancelada (ver _cancelamento). NULL nas outras.
+            data_canc, motivo_canc,
+            USUARIO_PADRAO if data_canc else None,
         ])
 
         # As colunas de ZERO_NFP entram com 0 em vez de NULL — ver o comentário
@@ -2403,7 +2598,8 @@ class TelaImportacaoNFe(ttk.Frame):
             self._gravar_parcelas_saida(cur, n, num, cli, emp, fil, dados,
                                         ult_grav, log, total_erp)
         log.append(f"✅ NF {n['nro_nf']}/{n['serie']} SAÍDA -> NFS_NUMERO {num}, "
-                   f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}")
+                   f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}"
+                   + (f" — CANCELADA em {self._data_br(data_canc)}" if data_canc else ""))
 
     def _gravar_parcelas_saida(self, cur, n, num, cli, emp, fil, dados, ult_grav,
                                log, total_erp):
@@ -2511,6 +2707,7 @@ class TelaImportacaoNFe(ttk.Frame):
         qtde_parc = len(n['parcelas']) if gerar_fin else 0
         lc = getattr(self, '_lc_padrao', None)
         vend = erp.get('cf_representante') or getattr(self, '_vend_padrao', None)
+        data_canc, _motivo_canc = self._cancelamento(n)
 
         cur.execute("""
             INSERT INTO TABELA_NF_ENTRADA (
@@ -2535,7 +2732,8 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFE_LOC_COBR_EMP, NFE_LOC_COBR_FIL, NFE_LOC_COBR,
                 NFE_COBRADOR_EMPRESA, NFE_COBRADOR_FILIAL,
                 NFE_SEGMENTO_EMP, NFE_SEGMENTO_FIL, NFE_TF_EMPRESA, NFE_TF_FILIAL,
-                NFE_USUARIO_INCL, NFE_USUARIO_ALT, NFE_ULT_GRAVACAO
+                NFE_USUARIO_INCL, NFE_USUARIO_ALT, NFE_ULT_GRAVACAO,
+                NFE_DATA_CANCELAMENTO
             ) VALUES (?,?,?, ?,?,?, ?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?, ?,?, ?,?,
                       ?, 'P','1', ?,?,
                       'S',?,'F',?,
@@ -2548,7 +2746,8 @@ class TelaImportacaoNFe(ttk.Frame):
                       ?,?,?,
                       ?,?,
                       ?,?,?,?,
-                      ?,?,?)
+                      ?,?,?,
+                      ?)
         """, [
             emp, fil, lan,
             empc, filc, forn,          # NFE_FORNECEDOR_* -> TABELA_CLI_FOR
@@ -2578,6 +2777,10 @@ class TelaImportacaoNFe(ttk.Frame):
             empc, filc,                # NFE_COBRADOR_* -> TABELA_CLI_FOR
             empc, filc, empc, filc,    # NFE_SEGMENTO_* e NFE_TF_* (TIPO_FLUXO)
             USUARIO_PADRAO, USUARIO_PADRAO, ult_grav,
+            # data do cancelamento: é o que o ERP testa (NFE_DATA_CANCELAMENTO IS
+            # NULL) nos livros, no SPED e nos painéis. A entrada não tem campo de
+            # justificativa como a saída.
+            data_canc,
         ])
 
         cols_zero = "".join(f", {c}" for c in ZERO_NFEP)
@@ -2656,7 +2859,8 @@ class TelaImportacaoNFe(ttk.Frame):
                                       valores)
         self._cc_nota_entrada(cur, emp, fil, lan, forn, t.get('vNF', 0.0), empc, filc)
         log.append(f"✅ NF {n['nro_nf']}/{n['serie']} ENTRADA -> NFE_LANCAMENTO {lan}, "
-                   f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}")
+                   f"{len(n['itens'])} item(ns), {self._brl(t.get('vNF', 0.0))}"
+                   + (f" — CANCELADA em {self._data_br(data_canc)}" if data_canc else ""))
 
     def _gravar_titulo_pagar(self, cur, n, forn, emp, fil, dados, ult_grav, log, valores):
         empc, filc = dados.get('emp_cad', emp), dados.get('fil_cad', fil)
@@ -2716,6 +2920,14 @@ class TelaImportacaoNFe(ttk.Frame):
             return datetime.datetime.strptime(str(texto)[:10], '%Y-%m-%d').date()
         except Exception:
             return None
+
+    @staticmethod
+    def _data_br(data):
+        """date -> dd/mm/aaaa, para o log e as mensagens (aceita None)."""
+        try:
+            return data.strftime('%d/%m/%Y')
+        except Exception:
+            return str(data or '')
 
     # ------------------------------------------------------------ EXPORTAR
     def _exportar_analise(self):

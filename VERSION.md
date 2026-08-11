@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.16                            │
+│                      VERSÃO 4.17                            │
 │                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.16 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.17 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **A nota cancelada aparecia como 02 no cadastro, mas o ERP continuava tratando como venda boa.** A 4.16 passou a gravar o `NFS_SITD_CODIGO = '02'` e o campo aparece certo na tela de cadastro da nota — só que **não é por ele que o ERP sabe que a nota foi cancelada**. A tela de notas de saída, o livro fiscal (`PROC_LIVRO_SAIDA`), o SPED (`PROC_COFIS_431`/`435`, que exportam a coluna *Cancelado*), os relatórios de vendas e todos os painéis testam uma coisa só: **`NFS_DATA_CANCELA IS NULL`**. Com a data em branco, a nota 1585 saía da lista com a coluna *Cancelado* vazia, ícone de Finalizado, e somando no faturamento. Agora a **data** e a **justificativa** do cancelamento vão para `NFS_DATA_CANCELA`, `NFS_MOTIVO_CANCELA` e `NFS_USUARIO_CANCELAMENTO` (na entrada, `NFE_DATA_CANCELAMENTO`), lidas do próprio evento: `dhRegEvento` (o registro na SEFAZ, não o pedido), o `xJust` de quem cancelou e o protocolo do evento. Sem carimbo de data no XML do evento, cai na emissão da nota — data errada por alguns dias é ruim, nota cancelada contando como venda é pior. **Denegada não entra aqui**: ela não foi cancelada, e o ERP tem a situação `04` própria para ela |
+| Importação Notas Fiscais   | ✅ PRONTO | **Botão “Corrigir Situação das Já Importadas”** para as notas que **já estão no ERP** — e que por isso a importação nunca reprocessa. Na base do cliente eram **279 notas canceladas** com a situação certa e a data de cancelamento em branco, além das que ficaram com `NFS_SITD_CODIGO` NULL antes da 4.16: em qualquer uma dessas bases, reimportar não é opção e mexer no banco à mão é pior. Analisada a pasta, o botão confere nota por nota (pela **chave** da NF-e, nunca por número solto) e grava **só o que está diferente**: a situação, quando divergir, e a data/justificativa do cancelamento **quando o campo estiver vazio** — cancelamento que o próprio ERP registrou não é sobrescrito. Nada mais é tocado: valores, itens, parcelas e títulos ficam como estão. A confirmação mostra quantas notas há de cada situação antes de gravar, o log lista cada mudança (`situação NULL -> 02 CANCELADA; cancelamento em 04/10/2022`) e o resumo separa corrigidas, já certas, não localizadas pela chave e erros. Um aviso na confirmação lembra que **financeiro já gerado para nota cancelada não é apagado** — nesta base não havia nenhum, mas em base importada por versão anterior à 4.16 pode haver |
+
+### ✅ VERSÃO 4.16 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

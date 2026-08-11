@@ -63,7 +63,10 @@ def ler_evento(xml_path: str) -> Optional[Dict[str, Any]]:
     nota cancelada entra no ERP como documento REGULAR, e a escrituração sai
     errada com valor que não existe mais.
 
-    Devolve {'chave', 'tp_evento', 'cstat', 'cancelamento'} ou None.
+    Devolve {'chave', 'tp_evento', 'cstat', 'cancelamento', 'data', 'motivo',
+    'protocolo'} ou None. A data e a justificativa vêm do próprio evento porque o
+    ERP tem campo para as duas (NFS_DATA_CANCELA / NFS_MOTIVO_CANCELA) e é por
+    elas que ele trata a nota como cancelada.
     """
     try:
         root, inf_nfe, _ns = _load_xml(xml_path)
@@ -92,8 +95,14 @@ def ler_evento(xml_path: str) -> Optional[Dict[str, Any]]:
         or ('canc' in raiz and cstat in CSTAT_CANCELADA)
         or (not tp_evento and cstat in ('101', '151'))
     )
+    # dhRegEvento é o registro na SEFAZ (o que vale); dhEvento é o pedido. No
+    # layout antigo (retCancNFe) o carimbo vem em dhRecbto.
+    data = (_data(_valor('dhRegEvento')) or _data(_valor('dhEvento'))
+            or _data(_valor('dhRecbto')))
+    motivo = _valor('xJust') or _valor('xEvento') or _valor('xMotivo')
     return {'chave': chave, 'tp_evento': tp_evento, 'cstat': cstat,
-            'cancelamento': cancelamento, 'arquivo': xml_path}
+            'cancelamento': cancelamento, 'arquivo': xml_path,
+            'data': data, 'motivo': motivo, 'protocolo': _valor('nProt')}
 
 
 def situacao_documento(nota: Dict[str, Any], cancelados=None) -> str:
@@ -397,7 +406,11 @@ def ler_pasta_notas(pasta: str, cnpj_empresa: str = '',
     total = len(arquivos)
     notas: List[Dict[str, Any]] = []
     vistas = set()
-    cancelados = set()          # chaves com cancelamento homologado na pasta
+    # chave -> dados do cancelamento homologado ({'data', 'motivo', 'protocolo'}).
+    # É dicionário e não conjunto porque o ERP grava a DATA e a JUSTIFICATIVA do
+    # cancelamento, e é por elas (NFS_DATA_CANCELA) que ele reconhece a nota como
+    # cancelada em livro fiscal, relatórios e telas.
+    cancelados = {}
     for i, arq in enumerate(arquivos):
         if callback_progresso:
             callback_progresso(i + 1, total)
@@ -410,7 +423,13 @@ def ler_pasta_notas(pasta: str, cnpj_empresa: str = '',
             # não é nota: pode ser o evento de cancelamento dela
             evento = ler_evento(arq)
             if evento and evento['cancelamento']:
-                cancelados.add(evento['chave'])
+                # a mesma nota pode ter o pedido e o registro do cancelamento em
+                # arquivos separados: fica o que tiver data.
+                atual = cancelados.get(evento['chave'])
+                if not atual or (not atual.get('data') and evento.get('data')):
+                    cancelados[evento['chave']] = {
+                        'data': evento.get('data'), 'motivo': evento.get('motivo'),
+                        'protocolo': evento.get('protocolo')}
             continue
         chave = nota.get('chave') or f"SEM-CHAVE::{arq}"
         if chave in vistas:
@@ -423,5 +442,6 @@ def ler_pasta_notas(pasta: str, cnpj_empresa: str = '',
     for nota in notas:
         if nota.get('chave') in cancelados:
             nota['cancelada'] = True
+            nota['cancelamento'] = cancelados[nota['chave']]
         nota['sit_documento'] = situacao_documento(nota, cancelados)
     return notas
