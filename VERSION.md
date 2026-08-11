@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.15                            │
+│                      VERSÃO 4.16                            │
 │                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.15 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.16 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **A situação do documento fiscal não era gravada — nota cancelada entrava como regular.** O `NFS_SITD_CODIGO` (FK para `TABELA_SIT_DOCUM_FISCAL`) simplesmente não estava no INSERT das saídas: na base do cliente havia **14.010 notas com o campo NULL**, e nas entradas ia `'00'` (regular) fixo para todo mundo. Escrituração com nota cancelada declarada como regular é receita fiscal errada — o SPED pede o COD_SIT no registro C100. Agora a situação é apurada na leitura e gravada: **`00` REGULAR**, **`02` CANCELADO**, **`04` NF-e DENEGADA** e **`06` COMPLEMENTAR**. O cancelamento **não está no XML da nota** — é documento de evento separado, na mesma pasta, então os arquivos que não são nota passaram a ser lidos também: evento `110111`/`110112` autorizado (`cStat` 135/155) e o `retCancNFe` do layout antigo (`cStat` 101/151) marcam a nota pela chave. Denegada vem do `cStat` do próprio protocolo (110, 301, 302, 303) e complementar do `finNFe = 2`. **Carta de Correção (evento `110110`) não marca nada** — corrige a nota, não a cancela. A pasta inteira é lida antes de decidir, porque o evento costuma vir depois da nota na ordem dos arquivos e decidir nota por nota deixaria o cancelamento passar. Os códigos "extemporâneo" (01/03/07) dependem de **quando** foi escriturado, coisa que o XML não diz, e por isso não são deduzidos |
+| Importação Notas Fiscais   | ✅ PRONTO | **Nota cancelada e denegada entra para a escrituração, mas sem financeiro.** Mesmo com *Gerar financeiro* marcado, nota sem valor fiscal (situação `02` ou `04`) não gera parcela nem título: criar duplicata e conta a receber de uma nota que não vale é inventar recebimento que alguém teria de caçar e baixar à mão depois. O log diz por nota qual foi o desvio (`⚠ nota 202 com situação 02 — importada sem financeiro`). Complementar (`06`) continua gerando normal, porque vale |
+| Importação Notas Fiscais   | ✅ PRONTO | **A situação aparece antes de importar.** A aba 4 ganhou a coluna **SIT.** (`02 CANCELADA`, `04 DENEGADA`, `06 COMPLEMENTAR`), a linha fica em âmbar e o motivo explica o que vai acontecer. O STATUS continua `OK` de propósito: é ele que marca a nota para importar, e enfeitar o status faria a nota cancelada nunca entrar — que é o oposto do pedido. A exportação em CSV leva a coluna `SITUACAO`. **Para o cancelamento ser reconhecido os XMLs de evento têm de estar na pasta** — se o cliente guardou só os XMLs das notas, toda cancelada entra como `00`; vale pedir a pasta com os eventos junto |
+
+### ✅ VERSÃO 4.15 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

@@ -31,7 +31,16 @@ import sys
 
 from utils import tema
 from utils.firebird_service import FirebirdService
-from utils.nfe_completa import ler_pasta_notas, so_digitos
+from utils.nfe_completa import (ler_pasta_notas, so_digitos, SITD_REGULAR,
+                                SITD_CANCELADO, SITD_DENEGADA, SITD_COMPLEMENTAR)
+
+# rótulo curto de cada situação, para a grade e o log (a descrição completa está
+# na TABELA_SIT_DOCUM_FISCAL do ERP)
+SITD_DESCRICAO = {
+    SITD_CANCELADO: 'CANCELADA',
+    SITD_DENEGADA: 'DENEGADA',
+    SITD_COMPLEMENTAR: 'COMPLEMENTAR',
+}
 from utils.transformer import DataTransformer
 from utils.importer import FirebirdImporter
 from utils import rateio_contabil
@@ -370,9 +379,9 @@ class TelaImportacaoNFe(ttk.Frame):
         self.tree_prod.bind("<Double-1>", self._on_dblclick_produto)
         self.tree_nota = self._criar_aba(
             'notas', "4. Notas",
-            ("SEL", "STATUS", "TIPO", "NÚMERO", "SÉRIE", "EMISSÃO",
+            ("SEL", "STATUS", "SIT.", "TIPO", "NÚMERO", "SÉRIE", "EMISSÃO",
              "CONTRAPARTE", "VALOR", "ITENS", "PARC.", "MOTIVO"),
-            (40, 150, 60, 80, 45, 80, 230, 100, 45, 45, 240))
+            (40, 150, 110, 60, 80, 45, 80, 230, 100, 45, 45, 240))
         self.tree_nota.bind("<ButtonRelease-1>", self._on_click_nota)
         # botão direito: copiar a chave da NF-e (é o que se leva para consultar a
         # nota no portal da SEFAZ, no ERP ou num SELECT)
@@ -1243,6 +1252,19 @@ class TelaImportacaoNFe(ttk.Frame):
                     status, tag = 'PENDENTE FASES 1-3', 'ERRO'
                 else:
                     status, tag = 'OK', 'OK'
+                    # Situação do documento fiscal: cancelada e denegada entram
+                    # (a escrituração precisa delas) mas SEM financeiro. O STATUS
+                    # continua 'OK' de propósito — é ele que marca a nota para
+                    # importar e que os contadores comparam; a situação tem coluna
+                    # própria na grade e aparece no motivo.
+                    sit = str(n.get('sit_documento') or SITD_REGULAR)
+                    if sit != SITD_REGULAR:
+                        tag = 'AVISO'
+                        if sit in (SITD_CANCELADO, SITD_DENEGADA):
+                            motivos.append(f'{SITD_DESCRICAO.get(sit, sit)} (situação {sit}) — '
+                                           f'entra para a escrituração, sem gerar financeiro')
+                        else:
+                            motivos.append(f'{SITD_DESCRICAO.get(sit, sit)} (situação {sit})')
                     # aviso de título já existente (não bloqueia)
                     cod_tit = str(n['nro_nf']).lstrip('0')
                     serie = str(n['serie']).strip().upper()
@@ -1423,8 +1445,11 @@ class TelaImportacaoNFe(ttk.Frame):
                 f = analise['fase4'][k]
                 n = f['nota']
                 c = n.get('contraparte') or {}
+                sit = str(n.get('sit_documento') or SITD_REGULAR)
                 iid = self.tree_nota.insert("", tk.END, values=(
-                    "☑" if f['marcado'] else "☐", f['status'], f['tipo'], n['nro_nf'],
+                    "☑" if f['marcado'] else "☐", f['status'],
+                    f"{sit} {SITD_DESCRICAO.get(sit, 'REGULAR')}",
+                    f['tipo'], n['nro_nf'],
                     n['serie'],
                     n['data_emissao'].strftime('%d/%m/%Y') if n['data_emissao'] else '—',
                     (c.get('razao') or c.get('documento_formatado') or '')[:55],
@@ -2055,6 +2080,28 @@ class TelaImportacaoNFe(ttk.Frame):
             return int(escolhido)
         return int(info['codigo']) if info else None
 
+    # ------------------------------------------- SITUAÇÃO DO DOCUMENTO FISCAL
+    @staticmethod
+    def _sit_documento(nota):
+        """Código do NFS_SITD_CODIGO / NFE_SITD_CODIGO desta nota.
+
+        A leitura da pasta já decidiu (`utils.nfe_completa.situacao_documento`):
+        aqui é só o valor que vai para a coluna, com o regular como piso para
+        nunca gravar NULL — a coluna tem FK para TABELA_SIT_DOCUM_FISCAL e a
+        escrituração usa esse código.
+        """
+        return str(nota.get('sit_documento') or SITD_REGULAR)[:2]
+
+    @staticmethod
+    def _sem_valor_fiscal(nota):
+        """Nota cancelada ou denegada: entra na escrituração, não no financeiro.
+
+        Ela precisa existir no ERP (o SPED cobra o documento com a situação 02 /
+        04), mas gerar título e parcela de uma nota que não vale seria inventar
+        recebimento — o cliente teria de sair caçando título fantasma depois.
+        """
+        return str(nota.get('sit_documento') or '') in (SITD_CANCELADO, SITD_DENEGADA)
+
     def _obs_chunks(self, texto):
         t = (texto or '').strip()
         return [t[i:i + TAM_OBS] for i in range(0, min(len(t), TAM_OBS * QTDE_OBS), TAM_OBS)]
@@ -2147,6 +2194,13 @@ class TelaImportacaoNFe(ttk.Frame):
             raise ValueError(
                 f"CFOP {cfop_primeiro} sem variação de natureza escolhida na análise — "
                 f"reanalise antes de importar")
+        # Nota cancelada ou denegada não gera financeiro, mesmo com a opção
+        # marcada: ela existe para a escrituração, e criar título de nota que não
+        # vale é inventar recebimento (ver _sem_valor_fiscal).
+        if self._sem_valor_fiscal(n) and gerar_fin:
+            gerar_fin = False
+            log.append(f"   ⚠ nota {n['nro_nf']} com situação "
+                       f"{self._sit_documento(n)} — importada sem financeiro")
         # Sem gerar financeiro não existe parcela nenhuma. Dizer no cabeçalho que
         # a nota tem N parcelas e não gravar nenhuma é o que fazia o ERP recusar o
         # DANFE ("valor das parcelas diferente do valor total da nota").
@@ -2177,6 +2231,7 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFS_LC_EMPRESA, NFS_LC_FILIAL, NFS_LOCAL_COBRANCA,
                 NFS_VENDEDOR_EMPRESA, NFS_VENDEDOR_FILIAL, NFS_VENDEDOR,
                 NFS_TRANS_EMPRESA, NFS_TRANS_FILIAL,
+                NFS_SITD_CODIGO,
                 NFS_DIAS_INTERVALO, NFS_VALOR_TROCO
             ) VALUES (?,?,?,?,?,
                       ?,?,?,
@@ -2196,6 +2251,7 @@ class TelaImportacaoNFe(ttk.Frame):
                       ?,?,?,
                       ?,?,?,
                       ?,?,
+                      ?,
                       0,0)
         """, [
             emp, fil, num, n['nro_nf'], str(n['serie'])[:3],
@@ -2229,6 +2285,9 @@ class TelaImportacaoNFe(ttk.Frame):
             empc, filc, lc,            # NFS_LC_* -> TABELA_LOCAL_COBRANCA
             empc, filc, vend,          # NFS_VENDEDOR_* -> TABELA_VENDEDOR
             empc, filc,                # NFS_TRANS_* (transportadora é cadastro)
+            # situação do documento fiscal (FK -> TABELA_SIT_DOCUM_FISCAL):
+            # cancelada entra como 02, denegada 04, complementar 06. Ficava NULL.
+            self._sit_documento(n),
         ])
 
         # As colunas de ZERO_NFP entram com 0 em vez de NULL — ver o comentário
@@ -2443,6 +2502,11 @@ class TelaImportacaoNFe(ttk.Frame):
             raise ValueError(
                 f"CFOP {cfop_primeiro} sem variação de natureza escolhida na análise — "
                 f"reanalise antes de importar")
+        # cancelada/denegada não gera financeiro nem aqui (ver _sem_valor_fiscal)
+        if self._sem_valor_fiscal(n) and gerar_fin:
+            gerar_fin = False
+            log.append(f"   ⚠ nota {n['nro_nf']} com situação "
+                       f"{self._sit_documento(n)} — importada sem financeiro")
         # mesma regra da saída: sem financeiro, o cabeçalho declara 0 parcelas
         qtde_parc = len(n['parcelas']) if gerar_fin else 0
         lc = getattr(self, '_lc_padrao', None)
@@ -2474,7 +2538,7 @@ class TelaImportacaoNFe(ttk.Frame):
                 NFE_USUARIO_INCL, NFE_USUARIO_ALT, NFE_ULT_GRAVACAO
             ) VALUES (?,?,?, ?,?,?, ?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?,?, ?,?, ?,?,
                       ?, 'P','1', ?,?,
-                      'S','00','F',?,
+                      'S',?,'F',?,
                       'N','1','T','T',
                       '0',0,0,
                       ?,?,?,
@@ -2500,6 +2564,8 @@ class TelaImportacaoNFe(ttk.Frame):
             # NFE_EMITIDO = 'S' porque só importamos emissão própria: no ERP
             # 'S' acompanha NFE_TIPO_EMISSAO='P' e 'N' acompanha 'T'. Sem isso a
             # nota aparece como INCOMPLETA na tela de notas de entrada.
+            # A situação era '00' fixa: nota cancelada entrava como regular.
+            self._sit_documento(n),
             str(n.get('modelo') or '55')[:2],
             (erp.get('cf_endereco') or n['contraparte'].get('endereco') or '')[:50],
             (erp.get('cf_bairro') or n['contraparte'].get('bairro') or '')[:20],
@@ -2690,14 +2756,16 @@ class TelaImportacaoNFe(ttk.Frame):
                                 f['codigo_erp'] or '', f['casou_por'], f['itens']])
                 w.writerow([])
                 w.writerow(["FASE 4 - NOTAS"])
-                w.writerow(["STATUS", "TIPO", "NUMERO", "SERIE", "EMISSAO", "CHAVE",
+                w.writerow(["STATUS", "SITUACAO", "TIPO", "NUMERO", "SERIE", "EMISSAO", "CHAVE",
                             "CONTRAPARTE", "DOCUMENTO", "VALOR", "ITENS", "PARCELAS",
                             "MOTIVO", "ARQUIVO"])
                 for f in self.analise['fase4']:
                     n = f['nota']
                     c = n.get('contraparte') or {}
                     w.writerow([
-                        f['status'], f['tipo'], n['nro_nf'], n['serie'],
+                        f['status'],
+                        str(n.get('sit_documento') or SITD_REGULAR),
+                        f['tipo'], n['nro_nf'], n['serie'],
                         n['data_emissao'].strftime('%d/%m/%Y') if n['data_emissao'] else '',
                         n['chave'], c.get('razao', ''), c.get('documento_formatado', ''),
                         f"{n['totais'].get('vNF', 0.0):.2f}".replace('.', ','),

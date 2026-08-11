@@ -37,6 +37,82 @@ def so_digitos(valor: Any) -> str:
     return re.sub(r'\D', '', str(valor or ''))
 
 
+# --------------------------------------------- situação do documento fiscal
+# Códigos da TABELA_SIT_DOCUM_FISCAL do ERP (são os do SPED, registro C100):
+SITD_REGULAR = '00'
+SITD_CANCELADO = '02'
+SITD_DENEGADA = '04'
+SITD_COMPLEMENTAR = '06'
+
+# cStat do protocolo de autorização que significam DENEGADA: o documento nunca
+# valeu, e é isso que a escrituração precisa saber.
+CSTAT_DENEGADA = {'110', '301', '302', '303'}
+# cStat de cancelamento homologado (layout antigo, no retCancNFe)
+CSTAT_CANCELADA = {'101', '151', '135', '155'}
+# eventos de cancelamento (o layout atual: evento separado, arquivo separado)
+EVENTOS_CANCELAMENTO = {'110111', '110112'}
+# cStat que confirmam o registro do evento
+CSTAT_EVENTO_OK = {'135', '155'}
+
+
+def ler_evento(xml_path: str) -> Optional[Dict[str, Any]]:
+    """Lê um XML que NÃO é nota: evento (cancelamento, CC-e) ou cancelamento antigo.
+
+    O cancelamento não está no XML da nota — ele é um documento à parte, na mesma
+    pasta (`...-procEventoNFe.xml`, `...-can.xml`). Sem ler esses arquivos, uma
+    nota cancelada entra no ERP como documento REGULAR, e a escrituração sai
+    errada com valor que não existe mais.
+
+    Devolve {'chave', 'tp_evento', 'cstat', 'cancelamento'} ou None.
+    """
+    try:
+        root, inf_nfe, _ns = _load_xml(xml_path)
+    except Exception:
+        return None
+    if root is None or inf_nfe is not None:
+        return None          # é nota, não evento
+
+    def _valor(tag):
+        for el in root.iter():
+            if re.sub(r'\{.*\}', '', el.tag) == tag and (el.text or '').strip():
+                return (el.text or '').strip()
+        return ''
+
+    chave = so_digitos(_valor('chNFe'))
+    if not chave:
+        return None
+    tp_evento = _valor('tpEvento')
+    cstat = _valor('cStat')
+    raiz = re.sub(r'\{.*\}', '', root.tag).lower()
+    # Cancelamento pode chegar de três formas: evento 110111/110112 registrado,
+    # o retCancNFe do layout antigo, ou um arquivo cujo próprio nome/raiz é de
+    # cancelamento com o cStat de homologação.
+    cancelamento = bool(
+        (tp_evento in EVENTOS_CANCELAMENTO and (not cstat or cstat in CSTAT_EVENTO_OK))
+        or ('canc' in raiz and cstat in CSTAT_CANCELADA)
+        or (not tp_evento and cstat in ('101', '151'))
+    )
+    return {'chave': chave, 'tp_evento': tp_evento, 'cstat': cstat,
+            'cancelamento': cancelamento, 'arquivo': xml_path}
+
+
+def situacao_documento(nota: Dict[str, Any], cancelados=None) -> str:
+    """Código da TABELA_SIT_DOCUM_FISCAL para esta nota.
+
+    Ordem de precedência: DENEGADA vence tudo (o documento nunca existiu),
+    depois CANCELADO, depois COMPLEMENTAR (`finNFe=2`); o resto é REGULAR.
+    Os códigos "extemporâneo" (01/03/07) dependem de quando foi escriturado,
+    coisa que o XML não diz, então não são deduzidos aqui.
+    """
+    if str(nota.get('cstat') or '').strip() in CSTAT_DENEGADA:
+        return SITD_DENEGADA
+    if nota.get('cancelada') or (cancelados and nota.get('chave') in cancelados):
+        return SITD_CANCELADO
+    if int(nota.get('finalidade') or 1) == 2:
+        return SITD_COMPLEMENTAR
+    return SITD_REGULAR
+
+
 def _busca(pai, caminho: str):
     """`find` tolerante a XML com e sem namespace (o ERP recebe os dois)."""
     if pai is None:
@@ -299,6 +375,9 @@ def ler_nota_completa(xml_path: str, cnpj_empresa: str = '') -> Optional[Dict[st
         'inf_cpl': (_get(inf_adic, 'infCpl') or '') if inf_adic is not None else '',
         'inf_ad_fisco': (_get(inf_adic, 'infAdFisco') or '') if inf_adic is not None else '',
         'protocolo': (_get(prot, 'nProt') or '') if prot is not None else '',
+        # cStat do protocolo: 100/150 autorizada, 110/301/302/303 DENEGADA
+        'cstat': (_get(prot, 'cStat') or '') if prot is not None else '',
+        'motivo_status': (_get(prot, 'xMotivo') or '') if prot is not None else '',
         'emissao_propria': propria,
         # a contraparte da nota: nas saidas e o destinatario, nas entradas o emitente
         'contraparte': dest if tp_nf == 1 else emit,
@@ -318,6 +397,7 @@ def ler_pasta_notas(pasta: str, cnpj_empresa: str = '',
     total = len(arquivos)
     notas: List[Dict[str, Any]] = []
     vistas = set()
+    cancelados = set()          # chaves com cancelamento homologado na pasta
     for i, arq in enumerate(arquivos):
         if callback_progresso:
             callback_progresso(i + 1, total)
@@ -327,10 +407,21 @@ def ler_pasta_notas(pasta: str, cnpj_empresa: str = '',
             _log.warning(f"Erro ao ler {arq}: {e}")
             continue
         if not nota:
+            # não é nota: pode ser o evento de cancelamento dela
+            evento = ler_evento(arq)
+            if evento and evento['cancelamento']:
+                cancelados.add(evento['chave'])
             continue
         chave = nota.get('chave') or f"SEM-CHAVE::{arq}"
         if chave in vistas:
             continue
         vistas.add(chave)
         notas.append(nota)
+
+    # A situação só pode ser decidida com a pasta INTEIRA lida: o evento de
+    # cancelamento costuma vir depois da nota na ordem dos arquivos.
+    for nota in notas:
+        if nota.get('chave') in cancelados:
+            nota['cancelada'] = True
+        nota['sit_documento'] = situacao_documento(nota, cancelados)
     return notas
