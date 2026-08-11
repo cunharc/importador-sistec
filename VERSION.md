@@ -3,14 +3,24 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.13                            │
+│                      VERSÃO 4.14                            │
 │                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.13 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.14 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Clientes (planilha) | ✅ PRONTO | **Atualizar cliente que já existe, campo a campo.** Antes, quem já estava no ERP era listado como `JÁ CADASTRADO` e ignorado: mudar o vendedor, a condição de pagamento ou o limite de crédito de uma carteira inteira era trabalho de tela em tela. Entrou o combo **Modo** — *Só inserir novos* (segue o padrão), *Inserir novos e atualizar existentes*, *Só atualizar existentes* — e a regra que manda é uma só: **entra no UPDATE apenas o que está mapeado, preenchido e com o ✎ marcado**. Célula vazia não apaga nada e coluna não mapeada não é tocada; a planilha do cliente traz um punhado de campos e zerar o resto destruiria cadastro em uso. Os endereços 2, 3 e 4 não são mexidos (podem ter sido ajustados à mão para entrega/cobrança), e o cliente é reconhecido por **CPF/CNPJ → código mapeado → razão social**, sempre gravando no `CF_CODIGO` que ele já tem. A coluna CÓDIGO mostra por onde bateu (`7 (CPF/CNPJ)`) e, sem coluna de razão na planilha, a grade exibe `[ERP] NOME DO CLIENTE` — atualizar às cegas é o que não pode. Linhas a atualizar aparecem em azul com `ATUALIZAR (3 campo(s))`, há filtro próprio, e a confirmação lista **quais** campos serão sobrescritos antes de gravar |
+| Importação Clientes (planilha) | ✅ PRONTO | **O ✎ de cada campo decide o que pode sobrescrever.** Mapear uma coluna e autorizar que ela reescreva o cadastro são decisões diferentes: dá para ter o Endereço na planilha (usado no cliente **novo**) sem deixar que ele mexa no endereço de quem já existe. Cada campo atualizável tem seu ✎, com botões **✎ todos / ✎ nenhum**, tudo guardado no `config.ini`, e a dica ao lado do modo diz na hora quantos campos vão ser sobrescritos. CPF/CNPJ e Código não têm ✎ — são a identificação da linha, não conteúdo |
+| Importação Clientes (planilha) | ✅ PRONTO | **Nove campos novos para mapear, e vendedor/condição por código OU nome.** Entraram **Cond. Pagto Venda**, **Cond. Pagto Compra**, **Transportadora**, **Prazo Máximo**, **Desconto %**, **SUFRAMA**, **Bloqueado**, **Simples Nacional** e **Observação** — e os novos gravam **também no cadastro novo**, porque coluna fora da lista fixa do INSERT era lida da planilha e descartada em silêncio. Vendedor, condição de pagamento e transportadora aceitam **código ou nome/descrição**: número é conferido contra o cadastro do ERP e texto é procurado pela descrição (vendedor que não existe pelo nome continua sendo criado). Descrição repetida **não** é escolhida por conta própria — na base do cliente `A VISTA` é a condição 0 **e** a 236, e nesse caso o campo fica de fora com o aviso *"informe o CÓDIGO"* no log. `Ativo (S/N)` aceita S/N, SIM/NÃO, 1/0 e ATIVO/INATIVO, e no UPDATE a célula vazia significa "não mexe" (no cadastro novo continua entrando como ativo) |
+| Importação Clientes (planilha) | ✅ PRONTO | 🐞 **O mapeamento "Email NF-e" nunca gravou nada.** `CF_EMAIL_NFE` é `VARCHAR(1)`: uma **flag** ("manda NF-e por e-mail?"), não um endereço. A coluna mapeada era lida da planilha e jogada fora, e o INSERT gravava `'S'` fixo para todo mundo. O campo virou **"Envia NF-e por e-mail (S/N)"** e agora vale no cadastro novo e na atualização (sem a coluna mapeada, segue o `'S'` de antes) |
+| Importação Clientes (planilha) | ✅ PRONTO | **Mapeamento recolhível** (`⊟ mapeamento`): com 28 campos, o bloco aberto deixava **109px** de grade em 1024x700. Recolhido depois de configurar, a grade vai a **462px** (270 → 530 em 1366x768), e ao reabrir volta ao lugar certo com as colunas refluídas pela largura. Também: o histórico de limite de crédito passa a registrar o valor **anterior** de verdade (era sempre `NULL`), e a confirmação avisa quando a IE está mapeada — o ERP tem trigger que, ao mudar a inscrição estadual, reescreve o `NFS_INSC_EST` das notas de saída dos últimos 90 dias |
+
+### ✅ VERSÃO 4.13 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

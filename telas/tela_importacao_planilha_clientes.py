@@ -31,10 +31,63 @@ CAMPOS_DISPONIVEIS = [
     ("Fone1", "fone1", False),
     ("Fone2", "fone2", False),
     ("Email", "email", False),
-    ("Email NF-e", "email_nfe", False),
-    ("Vendedor (nome)", "vendedor_nome", False),
+    # CF_EMAIL_NFE é VARCHAR(1): uma FLAG ("manda NF-e por e-mail?"), não um
+    # endereço. O rótulo dizia "Email NF-e" e a coluna mapeada era lida da
+    # planilha e jogada fora — o INSERT gravava 'S' fixo para todo mundo.
+    ("Envia NF-e por e-mail (S/N)", "email_nfe", False),
+    ("Vendedor (cód. ou nome)", "vendedor_nome", False),
     ("Limite de Crédito", "limite_credito", False),
     ("Ativo (S/N)", "ativo", False),
+    ("Cond. Pagto Venda (cód. ou descr.)", "cond_pgto_venda", False),
+    ("Cond. Pagto Compra (cód. ou descr.)", "cond_pgto_compra", False),
+    ("Transportadora (cód. ou nome)", "transportadora", False),
+    ("Prazo Máximo (dias)", "prazo_maximo", False),
+    ("Desconto (%)", "desconto", False),
+    ("SUFRAMA", "suframa", False),
+    ("Bloqueado (S/N)", "bloquear", False),
+    ("Simples Nacional (S/N)", "simples_nacional", False),
+    ("Observação", "observacao", False),
+]
+
+# --- modos de operação -------------------------------------------------------
+MODO_INSERIR = "Só inserir novos"
+MODO_AMBOS = "Inserir novos e atualizar existentes"
+MODO_ATUALIZAR = "Só atualizar existentes"
+MODOS = [MODO_INSERIR, MODO_AMBOS, MODO_ATUALIZAR]
+
+FILTRO_ATUALIZAR = "ATUALIZAR"
+FILTRO_IGNORADO = "IGNORADO (novo)"
+
+# Campos que o INSERT clássico não cobre: viram coluna direta, tanto no INSERT
+# (acrescentados ao fim) quanto no UPDATE. chave do mapeamento -> (coluna, tipo).
+# Sem isto, mapear "Prazo Máximo" seria lido da planilha e jogado fora calado —
+# foi o que acontecia (e ainda acontece) com "Email NF-e", que no banco é uma
+# FLAG VARCHAR(1) e não um endereço.
+# (chave, coluna, tipo, tamanho do texto no banco)
+CAMPOS_EXTRA = [
+    ('cond_pgto_venda',  'CF_COND_PGTO_VENDA',  'condpgto', None),
+    ('cond_pgto_compra', 'CF_COND_PGTO_COMPRA', 'condpgto', None),
+    ('transportadora',   'CF_TRANSPORTADORA',   'transportadora', None),
+    ('prazo_maximo',     'CF_PRAZO_MAXIMO',     'inteiro', None),
+    ('desconto',         'CF_DESCONTO',         'decimal', None),
+    ('suframa',          'CF_SUFRAMA',          'texto', 10),
+    ('bloquear',         'CF_BLOQUEAR',         'sn', None),
+    ('simples_nacional', 'CF_SIMPLES_NACIONAL', 'sn', None),
+    ('observacao',       'CF_OBSERVACAO',       'texto', None),   # BLOB
+]
+
+# Campos clássicos e a coluna que cada um atualiza. Endereço, cidade, vendedor,
+# IE e limite têm tratamento próprio (mais de uma coluna ou resolução no ERP).
+CAMPOS_SIMPLES_UPDATE = [
+    ('razao', 'CF_RAZAO'),
+    ('fantasia', 'CF_FANTASIA'),
+    ('bairro', 'CF_BAIRRO'),
+    ('cep', 'CF_CEP'),
+    ('fone1', 'CF_FONE1'),
+    ('fone2', 'CF_FONE2'),
+    ('email', 'CF_EMAIL'),
+    ('ativo', 'CF_ATIVO'),
+    ('email_nfe', 'CF_EMAIL_NFE'),
 ]
 
 class TelaImportacaoPlanilhaClientes(ttk.Frame):
@@ -117,29 +170,73 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         self.ent_linha_ini.insert(0, "2")
         self.ent_linha_ini.pack(side=tk.LEFT, padx=2)
 
+        # O que fazer com quem JÁ existe no ERP. Atualizar mexe em cadastro que
+        # está em uso, então é escolha explícita — nunca o padrão.
+        modo_row = ttk.Frame(content)
+        modo_row.pack(fill=tk.X, pady=2)
+        tk.Label(modo_row, text="Modo:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.cb_modo = ttk.Combobox(modo_row, values=MODOS, state="readonly", width=36,
+                                    font=("Segoe UI", 9))
+        self.cb_modo.set(MODO_INSERIR)
+        self.cb_modo.pack(side=tk.LEFT, padx=2)
+        self.cb_modo.bind("<<ComboboxSelected>>", self._on_modo_mudou)
+        self.lbl_modo = tk.Label(modo_row, text="", font=("Segoe UI", 8), fg="#555")
+        self.lbl_modo.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.btn_upd_todos = ttk.Button(modo_row, text="✎ todos", width=9,
+                                        command=lambda: self._marcar_campos_update(True))
+        self.btn_upd_nenhum = ttk.Button(modo_row, text="✎ nenhum", width=10,
+                                         command=lambda: self._marcar_campos_update(False))
+        self.btn_upd_nenhum.pack(side=tk.RIGHT, padx=(2, 5))
+        self.btn_upd_todos.pack(side=tk.RIGHT, padx=2)
+        tk.Label(modo_row, text="sobrescrever:", font=("Segoe UI", 8, "bold"),
+                 fg="#555").pack(side=tk.RIGHT, padx=(10, 2))
+
         # === COLUMN MAPPING (responsivo: reflui conforme a largura) ===
-        self.frame_map = ttk.LabelFrame(content, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
+        self.frame_map = ttk.LabelFrame(
+            content, text="Mapeamento de Colunas (Insira a letra: A, B, C...) — "
+                          "o ✎ ao lado diz se aquele campo pode SOBRESCREVER o que está no ERP",
+            padding="8")
         self.frame_map.pack(fill=tk.X, pady=4)
+        # os campos vivem num quadro interno para poder recolher o bloco inteiro:
+        # com 28 campos, o mapeamento aberto come a altura da grade em 1024x700
+        self.box_map = ttk.Frame(self.frame_map)
+        self.box_map.pack(fill=tk.X)
 
         self.entradas_map = {}
+        # Mapear uma coluna e sobrescrever o cadastro são decisões diferentes: dá
+        # para ter o Endereço na planilha (usado no cadastro NOVO) e não querer que
+        # ele mexa no endereço de quem já existe. Este ✎ é essa segunda decisão.
+        self.upd_campos = {}
         self._map_cells = []
         for (lbl_texto, chave, obrigatorio) in CAMPOS_DISPONIVEIS:
-            cell = ttk.Frame(self.frame_map)
+            cell = ttk.Frame(self.box_map)
             fg_color = "#C8001E" if obrigatorio else "#1A1A1A"
             tk.Label(cell, text=lbl_texto, font=("Segoe UI", 8, "bold"),
                      fg=fg_color).pack(side=tk.LEFT, padx=(0, 4))
             ent = ttk.Entry(cell, width=5, font=("Segoe UI", 9))
             ent.pack(side=tk.LEFT)
             self.entradas_map[chave] = ent
+            if chave not in self.CHAVES_FORA_DO_UPDATE:
+                var = tk.BooleanVar(value=True)
+                chk = ttk.Checkbutton(cell, text="✎", variable=var,
+                                      command=self._atualizar_dica_campos)
+                chk.pack(side=tk.LEFT, padx=(3, 0))
+                self.upd_campos[chave] = (var, chk)
             self._map_cells.append(cell)
 
         self._map_cols = 0
         self.frame_map.bind("<Configure>", self._on_map_resize)
         self.after(100, self._on_map_resize)
 
+        self.btn_recolher_map = ttk.Button(modo_row, text="⊟ mapeamento", width=15,
+                                           command=self._alternar_mapa)
+        self.btn_recolher_map.pack(side=tk.RIGHT, padx=(10, 2))
+
         # === ACTIONS + PROGRESS ===
         actions_row = ttk.Frame(content)
         actions_row.pack(fill=tk.X, pady=4)
+        self.actions_row = actions_row     # âncora para recolher/mostrar o mapeamento
 
         ttk.Button(actions_row, text="☑ Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="☐ Desmarcar", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
@@ -162,7 +259,8 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
 
         tk.Label(filter_row, text="Filtrar Status:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
         self.cb_filtro_status = ttk.Combobox(filter_row,
-                                              values=["Todos", "OK", "ERRO", "JÁ CADASTRADO",
+                                              values=["Todos", "OK", FILTRO_ATUALIZAR, "ERRO",
+                                                      "JÁ CADASTRADO", FILTRO_IGNORADO,
                                                       FILTRO_MULTIVALOR],
                                               state="readonly", width=26, font=("Segoe UI", 9))
         self.cb_filtro_status.current(0)
@@ -187,6 +285,8 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         self.tree.tag_configure('ERRO', background='#FADBD8')
         self.tree.tag_configure('OK', background='#EAFAF1')
         self.tree.tag_configure('AVISO', background='#FEF5D3')
+        self.tree.tag_configure('ATU', background='#E4EEFB')   # vai ser atualizado
+        self.tree.tag_configure('NEUTRO', background='#F1F5F9')
 
         scroll_y = ttk.Scrollbar(frame_grade, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scroll_y.set)
@@ -202,8 +302,11 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         config.set(secao, 'ultimo_arquivo', self.caminho_arquivo)
         config.set(secao, 'ultima_aba', self.cb_abas.get())
         config.set(secao, 'linha_inicial', self.ent_linha_ini.get())
+        config.set(secao, 'modo', self.cb_modo.get())
         for chave, ent in self.entradas_map.items():
             config.set(secao, f'map_{chave}', ent.get().strip())
+        for chave, (var, _chk) in self.upd_campos.items():
+            config.set(secao, f'upd_{chave}', 'S' if var.get() else 'N')
         with open('config.ini', 'w', encoding='utf-8') as f:
             config.write(f)
         self.config = config
@@ -211,7 +314,13 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
     def _carregar_config_mapeamento(self):
         secao = 'IMPORTACAO_CLIENTES'
         if not self.config.has_section(secao):
+            self._on_modo_mudou()
             return
+        modo = self.config.get(secao, 'modo', fallback=MODO_INSERIR)
+        self.cb_modo.set(modo if modo in MODOS else MODO_INSERIR)
+        for chave, (var, _chk) in self.upd_campos.items():
+            var.set(self.config.get(secao, f'upd_{chave}', fallback='S').upper() == 'S')
+        self._on_modo_mudou()
         arquivo = self.config.get(secao, 'ultimo_arquivo', fallback='')
         if arquivo and os.path.exists(arquivo):
             self.caminho_arquivo = arquivo
@@ -234,16 +343,38 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     self.entradas_map[chave].insert(0, valor)
 
     def _on_map_resize(self, event=None):
+        try:                                  # o after() ainda dispara na tela fechada
+            if not self.frame_map.winfo_exists():
+                return
+        except tk.TclError:
+            return
         largura = self.frame_map.winfo_width()
         if largura <= 1:
             return
-        por_campo = 205  # px por campo, largo o suficiente p/ o maior rótulo caber inteiro
+        # + o checkbox ✎ ao lado da letra da coluna
+        por_campo = 235  # px por campo, largo o suficiente p/ o maior rótulo caber inteiro
         cols = max(1, (largura - 24) // por_campo)
         cols = min(cols, len(self._map_cells))
         if cols == self._map_cols:
             return
         self._map_cols = cols
         self._reflow_mapa(cols)
+
+    def _alternar_mapa(self):
+        """Recolhe/mostra o bloco de mapeamento, devolvendo a altura para a grade.
+
+        Some o LabelFrame inteiro (não só o conteúdo): esvaziar o quadro por dentro
+        não faz o Tk recalcular a altura que ele já pediu, e a grade continuava do
+        mesmo tamanho.
+        """
+        if self.frame_map.winfo_ismapped():
+            self.frame_map.pack_forget()
+            self.btn_recolher_map.config(text="⊞ mapeamento")
+        else:
+            self.frame_map.pack(fill=tk.X, pady=4, before=self.actions_row)
+            self.btn_recolher_map.config(text="⊟ mapeamento")
+            self._map_cols = 0            # força o reflow ao reabrir
+            self.after(50, self._on_map_resize)
 
     def _reflow_mapa(self, cols):
         for cell in self._map_cells:
@@ -284,8 +415,15 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         mapa_colunas = {chave: ent.get().strip() for chave, ent in self.entradas_map.items()}
         if not mapa_colunas.get('documento'):
             return messagebox.showwarning("Aviso", "Você precisa mapear obrigatoriamente a coluna 'CPF/CNPJ'.")
-        if not mapa_colunas.get('razao'):
-            return messagebox.showwarning("Aviso", "Você precisa mapear obrigatoriamente a coluna 'Razão Social'.")
+        # A razão social é obrigatória para CADASTRAR. Para só atualizar não é: o
+        # CPF/CNPJ já identifica o cliente, e exigir a coluna obrigaria a
+        # sobrescrever o nome de quem está no ERP mesmo quando se quer mudar só o
+        # limite de crédito.
+        if not mapa_colunas.get('razao') and self._pode_inserir():
+            return messagebox.showwarning(
+                "Aviso", "Para inserir clientes novos você precisa mapear a coluna "
+                         "'Razão Social'.\n\nSe a planilha só serve para atualizar, "
+                         "escolha o modo 'Só atualizar existentes'.")
 
         self._salvar_config_mapeamento()
         self.btn_analisar.config(state=tk.DISABLED)
@@ -298,7 +436,7 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
     def _analisar_bg(self, aba, mapa_colunas, linha_ini):
         try:
             self.registros_lidos = ler_planilha_produtos(self.caminho_arquivo, aba, mapa_colunas, linha_ini)
-            dados_existentes = {'documentos': {}, 'nomes': {}, 'codigos': set()}
+            dados_existentes = {'documentos': {}, 'nomes': {}, 'codigos': set(), 'razoes': {}}
             try:
                 with FirebirdService(self.config_db) as fb:
                     emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
@@ -311,12 +449,17 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                         cod = re.sub(r'\D', '', str(row['cf_codigo'] or ''))
                         if cod:
                             dados_existentes['codigos'].add(cod)
+                        # o VALOR é o CF_CODIGO do ERP, não um simples True: é ele
+                        # que o UPDATE usa para achar o cliente certo
                         doc = re.sub(r'\D', '', str(row['cf_cpf_cgc'] or ''))
                         if doc:
-                            dados_existentes['documentos'][doc] = True
+                            dados_existentes['documentos'].setdefault(doc, row['cf_codigo'])
                         nome = self._remover_acentos(str(row['cf_razao'] or '')).strip().upper()
                         if nome:
-                            dados_existentes['nomes'][nome] = True
+                            dados_existentes['nomes'].setdefault(nome, row['cf_codigo'])
+                        # quem a planilha vai atualizar aparece na grade com o nome
+                        # QUE ESTÁ NO ERP: atualizar às cegas é o que não pode
+                        dados_existentes['razoes'][row['cf_codigo']] = str(row['cf_razao'] or '').strip()
             except Exception:
                 pass
             self.parent.after(0, lambda: self._renderizar_preview(dados_existentes))
@@ -410,15 +553,146 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
 
         return (end, '', comp)
 
-    def _planejar_codigos(self, itens, codigos_ocupados, docs_db, nomes_db, codigo_mapeado):
+    # ===================== MODO DE OPERAÇÃO E CAMPOS A ATUALIZAR =============
+    def _modo(self):
+        modo = self.cb_modo.get()
+        return modo if modo in MODOS else MODO_INSERIR
+
+    def _pode_atualizar(self):
+        return self._modo() in (MODO_AMBOS, MODO_ATUALIZAR)
+
+    def _pode_inserir(self):
+        return self._modo() in (MODO_AMBOS, MODO_INSERIR)
+
+    def _on_modo_mudou(self, _evento=None):
+        # os ✎ só fazem sentido quando existe UPDATE; fora disso ficam desligados
+        # para não parecer que estão comandando alguma coisa
+        estado = tk.NORMAL if self._pode_atualizar() else tk.DISABLED
+        for _var, chk in self.upd_campos.values():
+            chk.config(state=estado)
+        for btn in (self.btn_upd_todos, self.btn_upd_nenhum):
+            btn.config(state=estado)
+        if self._pode_atualizar():
+            self._atualizar_dica_campos()
+        else:
+            self.lbl_modo.config(text="quem já existe no ERP é apenas listado, não é tocado",
+                                 fg="#555")
+
+    def _atualizar_dica_campos(self):
+        if not self._pode_atualizar():
+            return
+        campos = self._campos_atualizaveis_mapeados()
+        self.lbl_modo.config(
+            text=(f"⚠ vai sobrescrever {len(campos)} campo(s) de quem já existe; "
+                  f"célula vazia não apaga nada" if campos
+                  else "nenhum campo marcado para sobrescrever — só inserção"),
+            fg="#B45309" if campos else "#555")
+
+    def _marcar_campos_update(self, ligado):
+        for var, _chk in self.upd_campos.values():
+            var.set(ligado)
+        self._atualizar_dica_campos()
+
+    def _sobrescreve(self, chave):
+        """O ✎ deste campo está marcado? (campo sem ✎ nunca sobrescreve)"""
+        par = self.upd_campos.get(chave)
+        return bool(par and par[0].get())
+
+    # a identificação da linha não é campo a atualizar
+    CHAVES_FORA_DO_UPDATE = {'documento', 'cf_codigo'}
+    # estas entram junto de outro campo (endereço e cidade), não sozinhas
+    CHAVES_ACOPLADAS = {'numero', 'complemento', 'uf'}
+
+    def _campos_atualizaveis_mapeados(self):
+        """Rótulos dos campos mapeados que um UPDATE vai mexer."""
+        rotulos = []
+        for (lbl, chave, _obrig) in CAMPOS_DISPONIVEIS:
+            if chave in self.CHAVES_FORA_DO_UPDATE or chave in self.CHAVES_ACOPLADAS:
+                continue
+            if self.entradas_map[chave].get().strip() and self._sobrescreve(chave):
+                rotulos.append(lbl.replace(' *', ''))
+        return rotulos
+
+    # ===================== CONVERSORES ======================================
+    @staticmethod
+    def _inteiro(valor):
+        """'30', '30.0' e '1.234' -> int. None quando não é número puro."""
+        s = str(valor or '').strip().replace(' ', '')
+        if not s:
+            return None
+        if re.fullmatch(r'-?\d+([.,]0+)?', s):
+            return int(float(s.replace(',', '.')))
+        if re.fullmatch(r'-?\d{1,3}(\.\d{3})+', s):     # 1.234 -> 1234
+            return int(s.replace('.', ''))
+        return None
+
+    @staticmethod
+    def _decimal(valor):
+        """Número da planilha em float, aceitando 1.234,56 e 1234.56. Zero VALE.
+
+        Diferente de `_parse_limite`, que descarta zero: um desconto de 0% é uma
+        informação (zera o desconto), não uma célula vazia.
+        """
+        s = re.sub(r'[^\d,.\-]', '', str(valor or '').strip())
+        if not s:
+            return None
+        if ',' in s and '.' in s:
+            s = s.replace('.', '').replace(',', '.')
+        elif ',' in s:
+            s = s.replace(',', '.')
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    def _sn(self, valor):
+        """'S'/'N' a partir de sim/não/1/0/ativo/inativo. Vazio -> None."""
+        if not str(valor or '').strip():
+            return None
+        return self._parse_ativo(valor)
+
+    def _resolver_ref(self, valor, por_nome, codigos, rotulo):
+        """Resolve "código OU nome/descrição" num código do ERP.
+
+        Devolve (codigo, aviso). Número que existe no ERP vale por si; texto é
+        procurado pelo nome/descrição (sem acento, maiúsculas). Não achou, ou
+        achou MAIS DE UM: o campo fica FORA do UPDATE e o log diz por quê —
+        gravar código que não existe é chave estrangeira quebrada, e escolher
+        sozinho entre dois é pior ainda. Descrição repetida acontece de verdade:
+        na base do cliente, 'A VISTA' é a condição 0 **e** a 236.
+        """
+        s = str(valor or '').strip()
+        if not s:
+            return None, None
+        n = self._inteiro(s)
+        if n is not None:
+            if n in codigos:
+                return n, None
+            return None, f"{rotulo} '{s}': este código não existe no ERP"
+        achados = por_nome.get(self._remover_acentos(s).strip().upper())
+        if not achados:
+            return None, f"{rotulo} '{s}': não encontrado(a) pela descrição/nome"
+        if len(achados) > 1:
+            return None, (f"{rotulo} '{s}': a descrição está em {len(achados)} cadastros "
+                          f"({', '.join(str(c) for c in achados)}) — informe o CÓDIGO")
+        return achados[0], None
+
+    def _planejar_codigos(self, itens, codigos_ocupados, docs_db, nomes_db, codigo_mapeado,
+                          cod_por_doc=None, cod_por_nome=None):
         """
         Define o código final de cada item em DUAS passadas, sem cascata:
           1) reserva os códigos da planilha que ainda estão LIVRES no sistema;
           2) os que colidem (código já ocupado no sistema ou já reservado) recebem
              o MENOR número livre disponível, respeitando os reservados.
         Também aplica a unicidade de documento (CF_CPF_CGC) e o de-para por nome.
-        Marca em cada item: _plan_acao ('inserir'|'pular_doc'|'pular_nome'|'erro'),
-        _plan_codigo (int), _cod_orig (int|None) e _plan_remap (bool).
+        Marca em cada item: _plan_acao ('inserir'|'atualizar'|'ja_cadastrado'|
+        'ignorado_novo'|'pular_doc'|'erro'), _plan_codigo (int), _cod_orig
+        (int|None), _plan_remap (bool) e _casou_por (como bateu com o ERP).
+
+        Quem já existe no ERP é reconhecido por CPF/CNPJ, pelo código mapeado ou
+        pela razão social (nessa ordem) e, no modo que atualiza, sai com
+        'atualizar' e o código QUE ELE JÁ TEM — nunca remanejado, senão o UPDATE
+        cairia noutro cliente.
         """
         existentes = set()
         for c in codigos_ocupados:
@@ -428,8 +702,16 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
 
         reservados = set()
         conflitos = []
-        docs_seen = set(docs_db)
-        nomes_seen = set(nomes_db)
+        docs_db = set(docs_db)
+        nomes_db = set(nomes_db)
+        # o que já apareceu NA PLANILHA, separado do que já está no ERP: um é
+        # linha repetida (sempre pula), o outro é cliente existente (que no modo
+        # de atualizar é justamente o que se quer)
+        docs_seen = set()
+        nomes_seen = set()
+        pode_atualizar = self._pode_atualizar()
+        cod_por_doc = cod_por_doc or {}
+        cod_por_nome = cod_por_nome or {}
 
         for it in itens:
             razao = str(it.get('razao', '')).strip()
@@ -444,12 +726,47 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
             it['_cod_orig'] = None
             it['_plan_remap'] = False
             it['_plan_codigo'] = None
+            it['_casou_por'] = None
 
-            if not razao:
+            # sem razão social não há como CADASTRAR; para atualizar, o documento
+            # (ou o código) já identifica quem é
+            if not razao and not (pode_atualizar and (documento or cod)):
                 it['_plan_acao'] = 'erro'
                 continue
             if documento and documento in docs_seen:
+                it['_plan_acao'] = 'pular_doc'          # repetido na própria planilha
+                continue
+            if razao_norm and not documento and razao_norm in nomes_seen:
                 it['_plan_acao'] = 'pular_doc'
+                continue
+
+            # --- já existe no ERP? por documento, por código mapeado ou por nome
+            achou_cod = None
+            if documento and documento in docs_db:
+                achou_cod, it['_casou_por'] = cod_por_doc.get(documento), 'CPF/CNPJ'
+            elif codigo_mapeado and cod and int(cod) in existentes:
+                achou_cod, it['_casou_por'] = int(cod), 'código'
+            elif not documento and razao_norm and razao_norm in nomes_db:
+                achou_cod, it['_casou_por'] = cod_por_nome.get(razao_norm), 'razão social'
+
+            if it['_casou_por']:
+                if pode_atualizar and achou_cod is not None:
+                    it['_plan_acao'] = 'atualizar'
+                    it['_plan_codigo'] = int(achou_cod)
+                else:
+                    it['_plan_acao'] = 'ja_cadastrado'
+                if documento:
+                    docs_seen.add(documento)
+                elif razao_norm:
+                    nomes_seen.add(razao_norm)
+                continue
+
+            if not self._pode_inserir():
+                it['_plan_acao'] = 'ignorado_novo'
+                if documento:
+                    docs_seen.add(documento)
+                elif razao_norm:
+                    nomes_seen.add(razao_norm)
                 continue
 
             if codigo_mapeado and cod:
@@ -463,9 +780,6 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     it['_plan_acao'] = 'inserir'
                     it['_plan_codigo'] = c
             else:
-                if (not codigo_mapeado) and (not documento) and razao_norm and razao_norm in nomes_seen:
-                    it['_plan_acao'] = 'pular_nome'
-                    continue
                 it['_plan_acao'] = 'conflito'
                 conflitos.append(it)
 
@@ -505,30 +819,43 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         # Planeja os códigos de TODAS as linhas (reserva antigos + encaixa conflitos)
         self._planejar_codigos(
             self.registros_lidos, codigos_existentes,
-            set(docs_existentes.keys()), set(nomes_existentes.keys()), codigo_mapeado
+            set(docs_existentes.keys()), set(nomes_existentes.keys()), codigo_mapeado,
+            docs_existentes, nomes_existentes
         )
+        campos_upd = self._campos_atualizaveis_mapeados()
 
-        self._contagem = {'ok': 0, 'ja': 0, 'doc_rep': 0, 'remap': 0, 'multi': 0}
+        self._contagem = {'ok': 0, 'ja': 0, 'doc_rep': 0, 'remap': 0, 'multi': 0,
+                          'atu': 0, 'ign': 0}
         items = []
         validos = 0
+        razoes_erp = dados_existentes.get('razoes', {}) if dados_existentes else {}
         for reg in self.registros_lidos:
             documento = reg.get('documento_limpo', '')
             razao = str(reg.get('razao', '')).strip()
             acao = reg.get('_plan_acao')
+            if acao == 'atualizar' and not razao:
+                # planilha sem coluna de razão: mostra de quem é o cadastro
+                razao = f"[ERP] {razoes_erp.get(reg.get('_plan_codigo'), '')}"
             cod_sheet = re.sub(r'\D', '', str(reg.get('cf_codigo', '')).strip())
 
             if acao == 'erro':
                 status = "ERRO (Sem Razão Social)"
             elif acao == 'pular_doc':
-                if documento and documento in docs_existentes:
-                    status = "JÁ CADASTRADO"            # documento já existe no ERP
-                    self._contagem['ja'] += 1
-                else:
-                    status = "DOC. REPETIDO"             # documento repetido na própria planilha
-                    self._contagem['doc_rep'] += 1
-            elif acao == 'pular_nome':
+                status = "DOC. REPETIDO"                 # repetido na própria planilha
+                self._contagem['doc_rep'] += 1
+            elif acao == 'ja_cadastrado':
                 status = "JÁ CADASTRADO"
                 self._contagem['ja'] += 1
+            elif acao == 'ignorado_novo':
+                status = "IGNORADO (novo)"               # modo 'só atualizar'
+                self._contagem['ign'] += 1
+            elif acao == 'atualizar':
+                # diz de saída quantos campos vão mudar: atualização de zero
+                # campo é mapeamento incompleto, e passar batido seria pior
+                status = (f"ATUALIZAR ({len(campos_upd)} campo(s))" if campos_upd
+                          else "ATUALIZAR (nada mapeado)")
+                validos += 1
+                self._contagem['atu'] += 1
             else:  # inserir
                 status = "OK"
                 validos += 1
@@ -537,10 +864,14 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     self._contagem['remap'] += 1
 
             reg['_status'] = status
-            check = "☑" if status == "OK" else "☐"
+            check = "☑" if status == "OK" or acao == 'atualizar' else "☐"
 
             pode_editar = status == "OK"
-            if pode_editar:
+            if acao == 'atualizar':
+                # nada marcado = não mexer no tipo de quem já existe; marcar um
+                # aqui é o que autoriza o UPDATE a mudar CLI/FOR/OUTROS
+                cli = forn = out = "☐"
+            elif pode_editar:
                 cli = "☐"
                 forn = "☐"
                 out = "☑"
@@ -557,10 +888,14 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
 
             ativo_flag = self._parse_ativo(reg.get('ativo', ''))
             reg['_ativo'] = ativo_flag
-            ativo_fmt = "Ativo" if ativo_flag == 'S' else "Inativo"
+            # no UPDATE, célula vazia não é "ativar": é "não mexer no CF_ATIVO"
+            ativo_fmt = ("-" if acao == 'atualizar' and self._sn(reg.get('ativo', '')) is None
+                         else ("Ativo" if ativo_flag == 'S' else "Inativo"))
 
             cod_final = reg.get('_plan_codigo')
-            if acao != 'inserir':
+            if acao == 'atualizar':
+                cod_fmt = f"{cod_final} ({reg.get('_casou_por')})"   # o que já existe no ERP
+            elif acao != 'inserir':
                 cod_fmt = cod_sheet or "-"
             elif reg.get('_plan_remap'):
                 cod_fmt = f"{reg.get('_cod_orig')}→{cod_final}"   # antigo ocupado, remanejado
@@ -571,12 +906,14 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
 
             # linha âmbar quando alguma célula trazia mais de um valor: o cadastro
             # entra, mas com um valor só, e isso tem de ficar visível antes de gravar
-            if status == 'OK':
+            if status == 'OK' or acao == 'atualizar':
                 if reg.get('_multivalor'):
                     tag = 'AVISO'
                     self._contagem['multi'] += 1
                 else:
-                    tag = 'OK'
+                    tag = 'ATU' if acao == 'atualizar' else 'OK'
+            elif acao in ('ja_cadastrado', 'ignorado_novo'):
+                tag = 'NEUTRO'
             else:
                 tag = 'ERRO'
             reg['_tipo'] = {
@@ -624,9 +961,15 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 if c.get('multi'):
                     extra = (f" · ⚠ {c['multi']} com mais de um valor na célula "
                              f"(filtre por '{FILTRO_MULTIVALOR}')")
+                if c.get('atu'):
+                    campos = self._campos_atualizaveis_mapeados()
+                    extra += (f" · campos a atualizar: "
+                              f"{', '.join(campos) if campos else 'NENHUM mapeado'}")
                 self.lbl_status.config(
-                    text=(f"Pronto. {validos} novos de {total} lidos · "
-                          f"já cadastrados: {c.get('ja', 0)} · "
+                    text=(f"Pronto. {total} lidos · novos: {c.get('ok', 0)} · "
+                          f"a atualizar: {c.get('atu', 0)} · "
+                          f"já cadastrados (intocados): {c.get('ja', 0)} · "
+                          f"ignorados (novos): {c.get('ign', 0)} · "
                           f"doc. repetido: {c.get('doc_rep', 0)} · "
                           f"remanejados: {c.get('remap', 0)}{extra}")
                 )
@@ -634,6 +977,17 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 self._filtrar_status()
 
         render_chunk(0)
+
+    @staticmethod
+    def _linha_acionavel(status):
+        """Linha que o usuário pode marcar/editar: só quem vai inserir ou atualizar.
+
+        'JÁ CADASTRADO' e 'IGNORADO (novo)' são informativos — o modo escolhido
+        já disse que não se mexe neles.
+        """
+        s = str(status or '')
+        return not ('ERRO' in s or 'JÁ CADASTRADO' in s or 'IGNORADO' in s
+                    or 'DOC. REPETIDO' in s)
 
     def _on_tree_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
@@ -643,7 +997,7 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
             if not item_id: return
             valores = list(self.tree.item(item_id, 'values'))
 
-            if "ERRO" in valores[1] or "JÁ CADASTRADO" in valores[1]:
+            if not self._linha_acionavel(valores[1]):
                 return
 
             # SEL column
@@ -668,7 +1022,9 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 elif tipo[chave]:
                     tipo['outros'] = False
 
-                if not any(tipo.values()):
+                # Cadastro NOVO precisa sair com um dos três; em quem já existe,
+                # desmarcar tudo é justamente dizer "não mexa no tipo dele".
+                if not any(tipo.values()) and self.dados_grid[item_id].get('_plan_acao') != 'atualizar':
                     tipo['outros'] = True
 
                 self._pintar_tipo(item_id, tipo, valores)
@@ -676,14 +1032,14 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
     def _marcar_todos(self):
         for item in self.tree.get_children():
             v = list(self.tree.item(item, "values"))
-            if "ERRO" not in v[1]:
+            if self._linha_acionavel(v[1]):
                 v[0] = "☑"
                 self.tree.item(item, values=v)
 
     def _desmarcar_todos(self):
         for item in self.tree.get_children():
             v = list(self.tree.item(item, "values"))
-            if "ERRO" not in v[1]:
+            if self._linha_acionavel(v[1]):
                 v[0] = "☐"
                 self.tree.item(item, values=v)
 
@@ -699,7 +1055,7 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
         """Aplica um dos tipos de `utils.tipo_cadastro` a todas as linhas editáveis."""
         for item in self.tree.get_children():
             v = list(self.tree.item(item, "values"))
-            if "ERRO" in v[1] or "JÁ CADASTRADO" in v[1]:
+            if not self._linha_acionavel(v[1]):
                 continue
             tipo = tipo_cadastro.flags(rotulo)
             if item in self.dados_grid:
@@ -749,7 +1105,11 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 if reg.get('_multivalor'):
                     self.tree.move(item_id, '', tk.END)
                 continue
+            # 'ATUALIZAR' e 'IGNORADO' carregam a contagem de campos no próprio
+            # texto ('ATUALIZAR (3 campo(s))'), então casam por prefixo
             if (filtro == "Todos" or status == filtro
+                    or (filtro in (FILTRO_ATUALIZAR, FILTRO_IGNORADO)
+                        and status.startswith(filtro.split(' ')[0]))
                     or (filtro == "ERRO" and (status.startswith("ERRO")
                                               or status in ("DUPLICADO NA PLANILHA", "DOC. REPETIDO")))):
                 self.tree.move(item_id, '', tk.END)
@@ -765,9 +1125,36 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
             messagebox.showwarning("Aviso", "Selecione pelo menos um cliente para importar.")
             return
 
-        resp = messagebox.askyesno("Confirmar",
-            f"Deseja injetar os {len(selecionados)} clientes selecionados no Banco de Dados?\n"
-            "Essa ação não pode ser desfeita.")
+        novos = sum(1 for s in selecionados if s.get('_plan_acao') == 'inserir')
+        atualizar = sum(1 for s in selecionados if s.get('_plan_acao') == 'atualizar')
+        campos = self._campos_atualizaveis_mapeados()
+
+        linhas = [f"Selecionados: {len(selecionados)}",
+                  f"  a inserir:   {novos}",
+                  f"  a atualizar: {atualizar}", ""]
+        if atualizar:
+            if not campos:
+                return messagebox.showwarning(
+                    "Nada a atualizar",
+                    "Nenhum campo atualizável está mapeado — só CPF/CNPJ e código, que "
+                    "servem para achar o cliente.\n\nMapeie as colunas que você quer "
+                    "atualizar (vendedor, condição de pagamento, limite de crédito...) "
+                    "e analise de novo.")
+            linhas += ["Nos que já existem, estes campos serão SOBRESCRITOS:",
+                       "  • " + "\n  • ".join(campos), "",
+                       "Célula vazia não apaga o que está no ERP — o campo fica como está.",
+                       "Endereço, número e complemento entram no endereço principal; os",
+                       "endereços 2, 3 e 4 do cadastro não são tocados."]
+            if self.entradas_map['ie'].get().strip():
+                # o próprio ERP faz isso por trigger; quem manda a planilha tem de saber
+                linhas += ["", "⚠ A IE está mapeada: o ERP tem trigger que, ao mudar a",
+                           "   inscrição estadual, reescreve NFS_INSC_EST das notas de",
+                           "   saída dos últimos 90 dias desse cliente."]
+            linhas += ["", "Essa ação não pode ser desfeita."]
+        else:
+            linhas += ["Essa ação não pode ser desfeita."]
+
+        resp = messagebox.askyesno("Confirmar", "\n".join(linhas))
         if resp:
             self._salvar_config_mapeamento()
             self.btn_importar.config(state=tk.DISABLED)
@@ -785,9 +1172,12 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 sql_codigos = "SELECT CF_CODIGO FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?"
                 codigos_usados = set(row['cf_codigo'] for row in fb.query(sql_codigos, [emp, fil]))
 
-                sql_clientes = "SELECT CF_CPF_CGC, CF_CODIGO, CF_RAZAO FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?"
+                sql_clientes = ("SELECT CF_CPF_CGC, CF_CODIGO, CF_RAZAO, CF_LIMITE_CREDITO "
+                                "FROM TABELA_CLI_FOR WHERE CF_EMPRESA = ? AND CF_FILIAL = ?")
                 clientes_existentes = {}
                 nomes_existentes = {}
+                limite_atual = {}       # CF_CODIGO -> limite hoje, para o histórico OLD->NEW
+                razoes_erp = {}         # CF_CODIGO -> razão no ERP (log de quem foi mexido)
                 for row in fb.query(sql_clientes, [emp, fil]):
                     doc = re.sub(r'\D', '', str(row['cf_cpf_cgc'] or ''))
                     if doc:
@@ -795,36 +1185,45 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     nome = self._remover_acentos(str(row['cf_razao'] or '')).strip().upper()
                     if nome:
                         nomes_existentes[nome] = row['cf_codigo']
+                    limite_atual[row['cf_codigo']] = row['cf_limite_credito']
+                    razoes_erp[row['cf_codigo']] = str(row['cf_razao'] or '').strip()
 
                 inseridos = 0
                 erros = 0
                 atualizados = 0
+                ignorados_novos = 0   # novos, no modo que só atualiza
+                campos_tocados = 0    # colunas efetivamente gravadas nos UPDATEs
                 remapeados = 0    # códigos que estavam ocupados e foram remanejados
                 pulados_doc = 0   # documento repetido/já cadastrado
                 pulados_nome = 0  # nome já cadastrado (sem documento)
                 codigo_mapeado = bool(self.entradas_map['cf_codigo'].get().strip())
 
                 dados_existentes = {
-                    'documentos': {doc: True for doc in clientes_existentes},
-                    'nomes': {nome: True for nome in nomes_existentes}
+                    'documentos': dict(clientes_existentes),
+                    'nomes': dict(nomes_existentes)
                 }
 
                 # Planeja os códigos finais dos selecionados (autoritativo, com base atual do ERP)
                 self._planejar_codigos(
                     selecionados, codigos_usados,
-                    set(clientes_existentes.keys()), set(nomes_existentes.keys()), codigo_mapeado
+                    set(clientes_existentes.keys()), set(nomes_existentes.keys()), codigo_mapeado,
+                    clientes_existentes, nomes_existentes
                 )
 
                 # ---- Histórico de limite de crédito ----
                 usuario_hist = (self.config_db.get('user') or 'IMPORTADOR').upper()[:30]
                 hist_state = {'mode': None, 'next': 1}  # mode: None (indef) / 'auto' / 'manual'
 
-                def _gravar_historico_limite(cf_codigo, nome_cli, limite):
+                def _gravar_historico_limite(cf_codigo, nome_cli, limite, limite_old=None):
+                    # No UPDATE existe um valor anterior de verdade, e é ele que dá
+                    # sentido ao histórico. (O ERP ainda registra por conta própria em
+                    # TABELA_CLI_FOR_ALT_LCR, pelo trigger TRG_CLI_FOR_GERA_ALT_LCR.)
                     cols = ("HIST_EMPRESA, HIST_FILIAL, HIST_CLIENTE, HIST_CLIENTE_NOME, "
                             "HIST_LIMITE_CREDITO_OLD, HIST_LIMITE_CREDITO_NEW, "
                             "HIST_LIMITE_CREDITO_DATA_ALT, HIST_USUARIO")
-                    vals = "?, ?, ?, ?, NULL, ?, CURRENT_TIMESTAMP, ?"
-                    params = [emp, fil, cf_codigo, str(nome_cli)[:60], limite, usuario_hist]
+                    vals = "?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?"
+                    params = [emp, fil, cf_codigo, str(nome_cli)[:60], limite_old, limite,
+                              usuario_hist]
                     # Tenta deixar o banco gerar o HIST_ID (trigger/generator)
                     if hist_state['mode'] != 'manual':
                         try:
@@ -871,6 +1270,7 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     ibge_por_desc_uf.setdefault((d, est), r['cidibge_codigo'])
 
                 vend_por_nome = {}
+                vend_codigos = set()
                 max_vend = 0
                 vend_criados = 0      # vendedores novos cadastrados nesta rodada
                 vend_vinculados = 0   # clientes que sairam com CF_REPRESENTANTE preenchido
@@ -879,11 +1279,120 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                 for r in fb.query("SELECT VEND_CODIGO, VEND_NOME FROM TABELA_VENDEDOR WHERE VEND_EMPRESA=? AND VEND_FILIAL=?", [emp, fil]):
                     n = self._remover_acentos(str(r['vend_nome'] or '')).strip().upper()
                     if n:
-                        vend_por_nome.setdefault(n, r['vend_codigo'])
+                        vend_por_nome.setdefault(n, []).append(r['vend_codigo'])
                     try:
+                        vend_codigos.add(int(r['vend_codigo']))
                         max_vend = max(max_vend, int(r['vend_codigo']))
                     except (TypeError, ValueError):
                         pass
+
+                # Condição de pagamento e transportadora: a planilha pode trazer o
+                # CÓDIGO ou a DESCRIÇÃO/NOME, então cabe um índice de cada.
+                # a descrição guarda TODOS os códigos que a usam: repetida, ela não
+                # identifica ninguém, e o resolvedor pede o código em vez de chutar
+                cond_por_desc, cond_codigos = {}, set()
+                for r in fb.query("SELECT CONDPGTO_CODIGO, CONDPDTO_DESCRICAO FROM TABELA_CONDICAOPGTO"):
+                    d = self._remover_acentos(str(r['condpdto_descricao'] or '')).strip().upper()
+                    if d:
+                        cond_por_desc.setdefault(d, []).append(r['condpgto_codigo'])
+                    try:
+                        cond_codigos.add(int(r['condpgto_codigo']))
+                    except (TypeError, ValueError):
+                        pass
+
+                transp_por_nome, transp_codigos = {}, set()
+                try:
+                    for r in fb.query("SELECT TRANS_CODIGO, TRANS_DESCRICAO FROM TABELA_TRANSPORTADORA "
+                                      "WHERE TRANS_EMPRESA=? AND TRANS_FILIAL=?", [emp, fil]):
+                        d = self._remover_acentos(str(r['trans_descricao'] or '')).strip().upper()
+                        if d:
+                            transp_por_nome.setdefault(d, []).append(r['trans_codigo'])
+                        try:
+                            transp_codigos.add(int(r['trans_codigo']))
+                        except (TypeError, ValueError):
+                            pass
+                except Exception:
+                    pass
+
+                refs = {
+                    'condpgto': (cond_por_desc, cond_codigos, 'Condição de pagamento'),
+                    'transportadora': (transp_por_nome, transp_codigos, 'Transportadora'),
+                }
+
+                def _resolver_vendedor(valor):
+                    """Vendedor por CÓDIGO ou por NOME. Devolve (codigo, aviso).
+
+                    Nome que não existe é CADASTRADO (é como a tela sempre funcionou:
+                    a planilha do cliente é a fonte da carteira). Código que não
+                    existe não dá para inventar — avisa e deixa o campo de fora.
+                    """
+                    s = str(valor or '').strip()
+                    if not s:
+                        return None, None
+                    n = self._inteiro(s)
+                    if n is not None:
+                        if n in vend_codigos:
+                            return n, None
+                        return None, f"Vendedor de código {s} não existe no ERP"
+                    nome_sql = self._remover_acentos(s).upper()[:50]   # VEND_NOME VARCHAR(50)
+                    achados = vend_por_nome.get(nome_sql) or []
+                    if len(achados) > 1:
+                        return None, (f"Vendedor '{s}' existe em {len(achados)} cadastros "
+                                      f"({', '.join(str(c) for c in achados)}) — informe o CÓDIGO")
+                    if achados:
+                        return achados[0], None
+                    nonlocal max_vend, vend_criados
+                    try:
+                        max_vend += 1
+                        fb.execute("""
+                            INSERT INTO TABELA_VENDEDOR (
+                                VEND_EMPRESA, VEND_FILIAL, VEND_CODIGO,
+                                VEND_NOME, VEND_ATIVO, VEND_COMISSAO_FATURAMENTO
+                            ) VALUES (?, ?, ?, ?, 'S', 0)
+                        """, [emp, fil, max_vend, nome_sql])
+                        vend_por_nome[nome_sql] = [max_vend]
+                        vend_codigos.add(max_vend)
+                        vend_criados += 1
+                        log_linhas.append(f"✅ Vendedor '{nome_sql}' criado (código {max_vend})")
+                        return max_vend, None
+                    except Exception as e:
+                        return None, f"Erro ao criar vendedor '{s}': {e}"
+
+                def _extras_do_item(item):
+                    """(coluna, valor) dos campos EXTRA mapeados e preenchidos, + avisos.
+
+                    Vale para o INSERT e para o UPDATE: mapear "Prazo Máximo" tem de
+                    gravar nos dois, senão a coluna é lida da planilha e descartada.
+                    """
+                    cols, avisos = [], []
+                    for chave, coluna, tipo, limite in CAMPOS_EXTRA:
+                        if not self.entradas_map[chave].get().strip():
+                            continue
+                        bruto = str(item.get(chave, '') or '').strip()
+                        if not bruto:
+                            continue
+                        if tipo in refs:
+                            por_nome, codigos, rotulo = refs[tipo]
+                            valor, aviso = self._resolver_ref(bruto, por_nome, codigos, rotulo)
+                            if aviso:
+                                avisos.append(aviso)
+                                continue
+                        elif tipo == 'inteiro':
+                            valor = self._inteiro(bruto)
+                            if valor is None:
+                                avisos.append(f"{coluna}: '{bruto}' não é um número inteiro")
+                                continue
+                        elif tipo == 'decimal':
+                            valor = self._decimal(bruto)
+                            if valor is None:
+                                avisos.append(f"{coluna}: '{bruto}' não é um número")
+                                continue
+                        elif tipo == 'sn':
+                            valor = self._sn(bruto)
+                        else:
+                            valor = bruto[:limite] if limite else bruto
+                        cols.append((coluna, valor, chave))
+                    return cols, avisos
 
                 total = len(selecionados)
                 for _i, item in enumerate(selecionados):
@@ -898,11 +1407,16 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                         continue
                     if acao == 'pular_doc':
                         pulados_doc += 1
-                        log_linhas.append(f"⚠ {item.get('razao', '')[:60]} — documento {documento} repetido/já cadastrado, pulando")
+                        log_linhas.append(f"⚠ {item.get('razao', '')[:60]} — documento {documento} repetido na planilha, pulando")
                         continue
-                    if acao == 'pular_nome':
+                    if acao == 'ja_cadastrado':
                         pulados_nome += 1
-                        log_linhas.append(f"⚠ {item.get('razao', '')[:60]} — nome já cadastrado, pulando")
+                        log_linhas.append(f"⚠ {item.get('razao', '')[:60]} — já cadastrado no ERP, não tocado")
+                        continue
+                    if acao == 'ignorado_novo':
+                        ignorados_novos += 1
+                        log_linhas.append(f"⚠ {item.get('razao', '')[:60]} — não existe no ERP; "
+                                          f"o modo é só atualizar, pulando")
                         continue
 
                     razao = str(item.get('razao', '')).strip().upper()[:50]
@@ -927,7 +1441,8 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     fone1 = multivalor.um_fone(item.get('fone1', ''))[0][:15]
                     fone2 = multivalor.um_fone(item.get('fone2', ''))[0][:15]
                     email = multivalor.um_email(item.get('email', ''))[0][:50]
-                    email_nfe = multivalor.um_email(item.get('email_nfe', ''))[0][:50]
+                    # flag S/N; sem coluna mapeada segue o padrão histórico ('S')
+                    envia_nfe = self._sn(item.get('email_nfe', '')) or 'S'
                     for aviso in item.get('_multivalor', []):
                         log_linhas.append(f"⚠ {razao[:40]} — {aviso}")
                     uf = str(item.get('uf', '')).strip().upper()[:2]
@@ -987,25 +1502,9 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     vendedor_codigo = None
                     vendedor_nome = str(item.get('vendedor_nome', '')).strip()
                     if vendedor_nome:
-                        # VEND_NOME e VARCHAR(50) NOT NULL
-                        vendedor_nome_sql = self._remover_acentos(vendedor_nome).upper()[:50]
-                        try:
-                            vendedor_codigo = vend_por_nome.get(vendedor_nome_sql)
-                            if vendedor_codigo is None:
-                                max_vend += 1
-                                novo_cod = max_vend
-                                fb.execute("""
-                                    INSERT INTO TABELA_VENDEDOR (
-                                        VEND_EMPRESA, VEND_FILIAL, VEND_CODIGO,
-                                        VEND_NOME, VEND_ATIVO, VEND_COMISSAO_FATURAMENTO
-                                    ) VALUES (?, ?, ?, ?, 'S', 0)
-                                """, [emp, fil, novo_cod, vendedor_nome_sql])
-                                vend_por_nome[vendedor_nome_sql] = novo_cod
-                                vendedor_codigo = novo_cod
-                                vend_criados += 1
-                                log_linhas.append(f"✅ Vendedor '{vendedor_nome_sql}' criado (código {novo_cod})")
-                        except Exception as e:
-                            log_linhas.append(f"⚠ Erro vendedor '{vendedor_nome}': {e}")
+                        vendedor_codigo, aviso_vend = _resolver_vendedor(vendedor_nome)
+                        if aviso_vend:
+                            log_linhas.append(f"⚠ {razao[:40]} — {aviso_vend}")
                     if vendedor_codigo is not None:
                         vend_vinculados += 1
                         vend_usados.add(vendedor_codigo)
@@ -1024,8 +1523,108 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     limite = self._parse_limite(item.get('limite_credito', ''))
                     cf_limite = limite  # None -> grava NULL em CF_LIMITE_CREDITO quando não há valor
 
+                    extras, avisos_extras = _extras_do_item(item)
+                    for aviso in avisos_extras:
+                        log_linhas.append(f"⚠ {razao[:40]} — {aviso} (campo não atualizado)")
+
+                    # ---------------------------------------------------- ATUALIZAR
+                    if acao == 'atualizar':
+                        cf_codigo = item['_plan_codigo']
+                        # sem coluna de razão na planilha, o log e o histórico usam o
+                        # nome que está no ERP — "atualizado: (vazio)" não diz nada
+                        nome_log = razao or razoes_erp.get(cf_codigo, f"cliente {cf_codigo}")
+                        sets = []
+
+                        def por(chave, coluna, valor):
+                            """Só entra no UPDATE o que está MAPEADO e PREENCHIDO.
+
+                            Célula vazia não zera coluna: a planilha do cliente traz um
+                            punhado de campos, e apagar o que ela não traz destruiria
+                            cadastro em uso — que é o oposto do que se pediu.
+                            """
+                            if not self.entradas_map[chave].get().strip():
+                                return
+                            if not self._sobrescreve(chave):
+                                return
+                            if str(item.get(chave, '') or '').strip() == '':
+                                return
+                            sets.append((coluna, valor))
+
+                        for chave, coluna in CAMPOS_SIMPLES_UPDATE:
+                            valor = {'razao': razao, 'fantasia': fantasia, 'bairro': bairro,
+                                     'cep': cep, 'fone1': fone1, 'fone2': fone2,
+                                     'email': email, 'ativo': cf_ativo,
+                                     'email_nfe': envia_nfe}[chave]
+                            por(chave, coluna, valor)
+
+                        # IE: acompanha o CF_ICMS (isento x contribuinte), como no INSERT
+                        if (self.entradas_map['ie'].get().strip() and self._sobrescreve('ie')
+                                and str(item.get('ie', '')).strip()):
+                            sets.append(('CF_RG_IE', rg_ie))
+                            sets.append(('CF_ICMS', cf_icms))
+                        # endereço principal apenas; os endereços 2/3/4 podem ter sido
+                        # ajustados à mão no ERP (entrega, cobrança) e não são cópia
+                        if (self.entradas_map['endereco'].get().strip()
+                                and self._sobrescreve('endereco') and endereco):
+                            sets.append(('CF_ENDERECO', endereco))
+                            if numero:
+                                sets.append(('CF_NRO_END', numero))
+                        if (cidade_codigo is not None and self._sobrescreve('cidade_nome')
+                                and self.entradas_map['cidade_nome'].get().strip()):
+                            sets.append(('CF_CIDADE', cidade_codigo))
+                            sets.append(('CF_CIDADE_EMPRESA', emp))
+                            sets.append(('CF_CIDADE_FILIAL', fil))
+                        if vendedor_codigo is not None and self._sobrescreve('vendedor_nome'):
+                            sets.append(('CF_REPRESENTANTE', vendedor_codigo))
+                            sets.append(('CF_REPRESENTANTE_EMP', emp))
+                            sets.append(('CF_REPRESENTANTE_FILIAL', fil))
+                        if limite is not None and self._sobrescreve('limite_credito'):
+                            sets.append(('CF_LIMITE_CREDITO', limite))
+                        # tipo (cliente/fornecedor/outros) só muda se o usuário marcou
+                        # alguma das três colunas na grade desta linha
+                        if any(tipo.values()):
+                            sets += [('CF_CLIENTE', is_cliente), ('CF_FORNECEDOR', is_fornecedor),
+                                     ('CF_OUTROS', is_outros)]
+                        # os extras também obedecem ao ✎ de cada campo
+                        sets += [(c, v) for c, v, chave in extras if self._sobrescreve(chave)]
+
+                        if not sets:
+                            log_linhas.append(f"⚠ {nome_log} (cod {cf_codigo}) — nada preenchido "
+                                              f"para atualizar, nada foi feito")
+                            continue
+                        try:
+                            colunas_sql = ", ".join(f"{c} = ?" for c, _ in sets)
+                            fb.execute(
+                                f"UPDATE TABELA_CLI_FOR SET {colunas_sql} "
+                                f"WHERE CF_EMPRESA = ? AND CF_FILIAL = ? AND CF_CODIGO = ?",
+                                [v for _, v in sets] + [emp, fil, cf_codigo]
+                            )
+                            atualizados += 1
+                            campos_tocados += len(sets)
+                            log_linhas.append(
+                                f"🔄 {nome_log} (cod {cf_codigo}, casou por {item.get('_casou_por')}) "
+                                f"atualizado: " + ", ".join(f"{c}={v}" for c, v in sets))
+                            if limite is not None:
+                                try:
+                                    _gravar_historico_limite(cf_codigo, nome_log, limite,
+                                                             limite_atual.get(cf_codigo))
+                                    log_linhas.append(
+                                        f"   💳 Limite {limite_atual.get(cf_codigo)} → {limite:.2f} "
+                                        f"(histórico gravado)")
+                                except Exception as e_lim:
+                                    log_linhas.append(f"   ⚠ Falha ao gravar histórico de limite: {e_lim}")
+                        except Exception as e:
+                            erros += 1
+                            log_linhas.append(f"❌ Erro ao atualizar {nome_log} (cod {cf_codigo}): {e}")
+                        continue
+
                     try:
-                        fb.execute("""
+                        # as colunas extra mapeadas entram no fim do INSERT: mapear
+                        # "Cond. Pagto" e ver o campo em branco no cadastro novo seria
+                        # o mesmo descarte silencioso de antes
+                        cols_extra = "".join(f", {c}" for c, _v, _k in extras)
+                        vals_extra = ", ?" * len(extras)
+                        fb.execute(f"""
                             INSERT INTO TABELA_CLI_FOR (
                                 CF_EMPRESA, CF_FILIAL, CF_CODIGO,
                                 CF_DATA, CF_DATA_ALT,
@@ -1045,7 +1644,7 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                                 CF_EMAIL,
                                 CF_EMAIL_NFE,
                                 CF_COD_ANTIGO,
-                                CF_LIMITE_CREDITO
+                                CF_LIMITE_CREDITO{cols_extra}
                             ) VALUES (
                                 ?, ?, ?,
                                 CURRENT_DATE, CURRENT_DATE,
@@ -1063,9 +1662,9 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                                 ?, ?, ?,
                                 ?, ?, '',
                                 ?,
-                                'S',
+                                ?,
                                 NULL,
-                                ?
+                                ?{vals_extra}
                             )
                         """, [
                             emp, fil, cf_codigo,
@@ -1082,8 +1681,9 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                             emp, fil, vendedor_codigo,
                             fone1, fone2,
                             email,
+                            envia_nfe,
                             cf_limite,
-                        ])
+                        ] + [v for _c, v, _k in extras])
                         inseridos += 1
                         codigos_usados.add(cf_codigo)
                         if item.get('_plan_remap'):
@@ -1094,9 +1694,9 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                         else:
                             log_linhas.append(f"✅ {razao} (cod {cf_codigo}) inserido com sucesso")
                         if documento:
-                            dados_existentes['documentos'][documento] = True
+                            dados_existentes['documentos'][documento] = cf_codigo
                         if razao_norm:
-                            dados_existentes['nomes'][razao_norm] = True
+                            dados_existentes['nomes'][razao_norm] = cf_codigo
 
                         if limite is not None:
                             try:
@@ -1109,15 +1709,18 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                         log_linhas.append(f"❌ Erro ao inserir {razao}: {e}")
 
                 total_sel = len(selecionados)
-                pulados = pulados_doc + pulados_nome
-                conta = (total_sel == inseridos + pulados + erros)
+                pulados = pulados_doc + pulados_nome + ignorados_novos
+                conta = (total_sel == inseridos + atualizados + pulados + erros)
                 msg = (
                     f"Processamento concluído!\n\n"
                     f"Selecionados:         {total_sel}\n"
                     f"Inseridos:            {inseridos}\n"
                     f"  dos quais remanej.: {remapeados}\n"
+                    f"Atualizados:          {atualizados}\n"
+                    f"  colunas gravadas:   {campos_tocados}\n"
                     f"Pulados (doc repet.): {pulados_doc}\n"
-                    f"Pulados (nome):       {pulados_nome}\n"
+                    f"Pulados (já no ERP):  {pulados_nome}\n"
+                    f"Ignorados (novos):    {ignorados_novos}\n"
                     f"Erros:                {erros}\n"
                     f"\n"
                     f"Vendedor vinculado:   {vend_vinculados} cliente(s) "
@@ -1126,15 +1729,20 @@ class TelaImportacaoPlanilhaClientes(ttk.Frame):
                     f"  sem vendedor:       {vend_sem}\n"
                 )
                 if not conta:
-                    msg += f"\n(atenção: {total_sel} ≠ {inseridos}+{pulados}+{erros})"
+                    msg += (f"\n(atenção: {total_sel} ≠ {inseridos}+{atualizados}+"
+                            f"{pulados}+{erros})")
                 if erros:
                     msg += "\nHouve erro(s) — veja o log para detalhes."
                 self.parent.after(0, lambda m=msg: self._safe_showinfo("Concluído", m))
 
                 resumo = (
-                    f"RESUMO: selecionados={total_sel} | inseridos={inseridos} "
-                    f"(remanejados={remapeados}) | pulados(doc)={pulados_doc} | "
-                    f"pulados(nome)={pulados_nome} | erros={erros} | "
+                    f"RESUMO ({self._modo()}): selecionados={total_sel} | "
+                    f"inseridos={inseridos} "
+                    f"(remanejados={remapeados}) | "
+                    f"atualizados={atualizados} ({campos_tocados} colunas) | "
+                    f"pulados(doc repetido)={pulados_doc} | "
+                    f"pulados(já no ERP)={pulados_nome} | "
+                    f"ignorados(novos)={ignorados_novos} | erros={erros} | "
                     f"vendedor vinculado={vend_vinculados} (criados={vend_criados}, "
                     f"sem vendedor={vend_sem})"
                 )
