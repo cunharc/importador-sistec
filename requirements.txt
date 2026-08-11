@@ -2,3 +2,7 @@ fdb==2.0.2
 openpyxl==3.1.2
 ttkthemes==3.2.2
 Pillow>=10.0.0
+# validação de certificado da atualização: truststore usa o repositório do
+# Windows (como o navegador); certifi é a rede de segurança
+truststore>=0.10.0
+certifi>=2024.2.2

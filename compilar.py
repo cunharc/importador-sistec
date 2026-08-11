@@ -32,6 +32,12 @@ PyInstaller.__main__.run([
     '--add-data=cfop_governo.json;.',
     '--add-data=config_modulos_log.json;.',
     '--add-binary=fbclient_*.dll;.',
+    # O updater importa os dois DENTRO de um try (utils/updater.contexto_ssl), e
+    # import assim o PyInstaller não enxerga: sem estes hidden-imports o .exe saía
+    # sem eles e voltava a validar certificado pela foto do repositório do
+    # Windows — que é o erro CERTIFICATE_VERIFY_FAILED na máquina do cliente.
+    '--hidden-import=truststore',
+    '--hidden-import=certifi',
     # Otimizações: Exclui módulos pesados que não são usados no seu sistema
     '--exclude-module=matplotlib',
     '--exclude-module=numpy',

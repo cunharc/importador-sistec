@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.14                            │
+│                      VERSÃO 4.15                            │
 │                   Data: 11/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.14 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.15 - RELEASE ATUAL (11/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Atualização automática     | ✅ PRONTO | 🐞 **`CERTIFICATE_VERIFY_FAILED`: a atualização morria antes de baixar.** O `urlopen` sem contexto usa o padrão do Python, que tira uma **foto** do repositório de raízes do Windows e **não busca o certificado intermediário faltante** (o navegador busca, pelo campo AIA do certificado). Daí o sintoma que não fazia sentido: *"unable to get local issuer certificate"* no sistema e o GitHub abrindo normalmente no navegador da mesma máquina. Antivírus e proxy que inspecionam TLS caem no mesmo erro, porque o certificado que chega é o deles e a raiz deles está no repositório do Windows, não na foto. Agora a validação é delegada ao **próprio Windows** (`truststore` → Schannel, a mesma validação do navegador, com AIA e raízes corporativas), com o `certifi` como rede de segurança para repositório vazio ou quebrado, e o mesmo contexto vale para o **download do zip** (que vem de outro host e cairia no mesmo ponto). Verificação nunca é desligada: o que se baixa é um `.exe` que vai ser executado, e aceitar certificado inválido seria deixar trocarem o executável no caminho. Diagnosticado com um exe congelado de teste — o PyInstaller não era o culpado, o exe valida certificado normalmente; o problema é a validação em si. Os dois pacotes entraram como `hidden-import` na compilação, porque são importados dentro de um `try` e o PyInstaller não os enxergava |
+| Atualização automática     | ✅ PRONTO | **Erro de certificado agora tem saída.** Máquina que não valida o certificado não consegue se atualizar sozinha — informar o erro e parar não resolve nada. A mensagem passou a explicar a causa provável (antivírus/proxy inspecionando a conexão, ou raiz faltando no Windows), mostrar o endereço da Release e **oferecer abrir a página no navegador** para baixar à mão. Falha de rede comum (sem internet, tempo esgotado) continua com a mensagem simples de sempre, e a checagem silenciosa da abertura segue sem incomodar ninguém |
+
+### ✅ VERSÃO 4.14 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

@@ -12,6 +12,7 @@ Uma versão pode ser dispensada ("não avisar mais desta"): fica em
 `[ATUALIZACAO] versao_ignorada` no config.ini e volta a avisar na seguinte.
 """
 import urllib.request
+import ssl
 import json
 import os
 import sys
@@ -37,6 +38,74 @@ GITHUB_REPO = "cunharc/importador-sistec"
 
 SECAO_CFG = 'ATUALIZACAO'
 NOME_EXE = 'Importador_Sistec.exe'
+URL_RELEASES = f"https://github.com/{GITHUB_REPO}/releases/latest"
+
+
+# --------------------------------------------------------------------- TLS
+_ctx_ssl = None
+
+
+def contexto_ssl():
+    """Contexto TLS que valida como o Windows valida.
+
+    `urlopen` sem contexto usa `ssl.create_default_context()`, que tira uma FOTO
+    do repositório de raízes do Windows e não busca certificado intermediário
+    faltante (o navegador busca, pelo campo AIA). Nas máquinas de cliente isso
+    aparece como `CERTIFICATE_VERIFY_FAILED: unable to get local issuer
+    certificate` — a atualização morria ali, mesmo com o GitHub abrindo no
+    navegador da mesma máquina. Antivírus e proxy que inspecionam TLS caem no
+    mesmo erro: o certificado que chega é o deles, e a raiz deles está no
+    repositório do Windows, não na foto.
+
+    Ordem: `truststore` (delega ao Schannel do Windows — mesma validação do
+    navegador, com AIA e raízes corporativas), `certifi` (raízes da Mozilla,
+    para repositório do Windows vazio ou quebrado) e, por fim, o padrão.
+    Verificação NUNCA é desligada: o que se baixa aqui é um .exe que vai ser
+    executado, e aceitar certificado inválido seria abrir a porta para trocarem
+    o executável no meio do caminho.
+    """
+    global _ctx_ssl
+    if _ctx_ssl is not None:
+        return _ctx_ssl
+    try:
+        import truststore
+        _ctx_ssl = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        _log.info("TLS: validação pelo repositório de certificados do Windows (truststore)")
+        return _ctx_ssl
+    except Exception as e:
+        _log.info(f"TLS: truststore indisponível ({e})")
+    try:
+        import certifi
+        _ctx_ssl = ssl.create_default_context(cafile=certifi.where())
+        _log.info("TLS: validação pelas raízes do certifi")
+        return _ctx_ssl
+    except Exception as e:
+        _log.info(f"TLS: certifi indisponível ({e})")
+    _ctx_ssl = ssl.create_default_context()
+    _log.info("TLS: contexto padrão do Python")
+    return _ctx_ssl
+
+
+def erro_de_certificado(e):
+    """O erro é de validação de certificado? (a saída para o usuário é outra)"""
+    if isinstance(e, ssl.SSLCertVerificationError):
+        return True
+    return 'CERTIFICATE_VERIFY_FAILED' in str(e) or 'certificate verify failed' in str(e)
+
+
+def _texto_erro_consulta(e):
+    """Mensagem do erro de consulta, com o caminho de saída quando é certificado."""
+    if erro_de_certificado(e):
+        return ("Não foi possível validar o certificado do GitHub nesta máquina.\n\n"
+                "Isso costuma ser antivírus ou proxy da rede inspecionando a conexão, "
+                "ou o certificado raiz faltando no Windows. O site abre no navegador "
+                "porque o navegador valida de outro jeito.\n\n"
+                "Baixe a nova versão pelo navegador e substitua o executável:\n"
+                f"{URL_RELEASES}\n\n"
+                f"Detalhe técnico: {e}")
+    return ("Não foi possível consultar o GitHub.\n"
+            "Verifique sua internet.\n\n"
+            f"Detalhe: {e}")
 
 
 # ------------------------------------------------------------------ versões
@@ -99,7 +168,7 @@ def consultar_release(timeout=8):
         'User-Agent': 'Importador-Sistec-Updater',   # a API do GitHub exige
         'Accept': 'application/vnd.github+json',
     })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=contexto_ssl()) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     return {
         'versao': extrair_versao(data.get('tag_name', '')),
@@ -173,6 +242,25 @@ def verificar_em_segundo_plano(root, ao_encontrar):
     threading.Thread(target=task, daemon=True).start()
 
 
+def _avisar_falha_consulta(root, e):
+    """Erro da consulta. Em falha de certificado, oferece o download manual.
+
+    Máquina que não valida o certificado não consegue se atualizar sozinha — de
+    nada serve só informar o erro; o caminho que funciona é o navegador.
+    """
+    _log.warning(f"Consulta de versão falhou: {e}")
+    if erro_de_certificado(e):
+        if messagebox.askyesno("Erro de conexão",
+                               _texto_erro_consulta(e) + "\n\nAbrir a página agora?"):
+            try:
+                import webbrowser
+                webbrowser.open(URL_RELEASES)
+            except Exception as e2:
+                messagebox.showerror("Erro", f"Não foi possível abrir o navegador:\n{e2}")
+        return
+    messagebox.showerror("Erro de conexão", _texto_erro_consulta(e))
+
+
 def verificar_e_atualizar(root, silencioso=False):
     """O botão "Atualizar sistema": consulta e, havendo versão nova, pergunta."""
     def task():
@@ -180,11 +268,7 @@ def verificar_e_atualizar(root, silencioso=False):
             rel = consultar_release()
         except Exception as e:
             if not silencioso:
-                root.after(0, lambda e=e: messagebox.showerror(
-                    "Erro de conexão",
-                    "Não foi possível consultar o GitHub.\n"
-                    "Verifique sua internet.\n\n"
-                    f"Detalhe: {e}"))
+                root.after(0, lambda e=e: _avisar_falha_consulta(root, e))
             return
         if tem_novidade(rel):
             root.after(0, perguntar_atualizacao, root, rel)
@@ -342,7 +426,10 @@ def _baixar_e_aplicar(root, url, versao_nova="Desconhecida", nome_asset=""):
 
             # 1. Baixa o arquivo da Release com barra de progresso
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response, open(baixado, 'wb') as out_file:
+            # mesmo contexto TLS da consulta: o asset vem de outro host
+            # (objects.githubusercontent.com) e cairia no mesmo erro de certificado
+            with urllib.request.urlopen(req, context=contexto_ssl()) as response, \
+                    open(baixado, 'wb') as out_file:
                 total_size = int(response.getheader('Content-Length', 0))
                 downloaded = 0
                 while True:
@@ -461,6 +548,8 @@ del "%~f0"
             os._exit(0)
 
         except Exception as e:
+            if erro_de_certificado(e):
+                return falhar(_texto_erro_consulta(e))
             falhar(f"Erro ao baixar/aplicar a atualização:\n{e}")
 
     threading.Thread(target=task, daemon=True).start()
