@@ -106,7 +106,9 @@ class FirebirdImporter:
             for i, prod in enumerate(produtos):
                 try:
                     # Extrai o código para usar no WHERE e remove do dict do SET
-                    prod_copy = dict(prod)
+                    # Chaves internas (prefixo '_') nao sao colunas: se entrarem
+                    # no SET o UPDATE morre com -206 (coluna desconhecida).
+                    prod_copy = {k: v for k, v in prod.items() if not k.startswith('_')}
                     codigo = prod_copy.pop('PRODUTO_CODIGO', None)
                     if not codigo:
                         raise ValueError("Chave 'PRODUTO_CODIGO' não fornecida para atualização.")

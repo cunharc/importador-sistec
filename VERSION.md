@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.22                            │
+│                      VERSÃO 4.23                            │
 │                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.22 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.23 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Produtos Planilha | ✅ PRONTO | 🐞 **Grupo e subgrupo por código não eram entendidos — viravam grupo novo.** A planilha era lida como se a célula fosse sempre *nome*: quem digitava `14` não caía no grupo 14 do ERP, ganhava um grupo **chamado “14”** criado na hora, e o produto ia para ele. Agora a célula é interpretada nas três formas que o cliente usa — código (`14`, ou `14.0` quando o Excel entrega a célula como número), descrição (`MAIALE DUROC`) ou as duas juntas (`14 - MAIALE DUROC`) — resolvida contra o cadastro real e **mostrada na grade já resolvida** (`14 - MAIALE DUROC`), incluindo o subgrupo, que é conferido **dentro do grupo escolhido** porque o código de subgrupo se repete entre grupos. Código que não existe no ERP **barra a linha** com o motivo (`ERRO (Grupo: código 99 não existe no ERP)`) em vez de inventar cadastro; nome que não existe continua sendo criado como antes. Coluna de grupo em branco agora aparece como `⚠ sem grupo → 1` — o produto não vai mais para o grupo 1 sem você saber |
+| Importação Produtos Planilha | ✅ PRONTO | **A descrição do ERP ao lado da descrição da planilha, e o DIVERGENTE dizendo o que divergiu.** A grade mostrava só o texto da planilha: quando a linha vinha `DIVERGENTE` não havia como saber *o que* estava diferente, porque o outro lado da comparação não aparecia em lugar nenhum. Entraram as colunas **`CÓD. ERP`** e **`DESCRIÇÃO NO ERP`** logo depois da `DESCRIÇÃO NA PLANILHA`, e o status passou a nomear a divergência: `DIVERGENTE (descrição, NCM 02101900→02032900, unidade KG→PC)`. A conferência agora é de bater o olho. NCM e unidade do ERP passaram a ser lidos e comparados também — antes só a descrição era confrontada, então NCM trocado passava como “JÁ CADASTRADO” |
+| Importação Produtos Planilha | ✅ PRONTO | 🐞 **“Atualizar” em produto que já existe: escolha do que gravar — e o UPDATE voltou a funcionar.** Dois problemas: (1) a ação só existia para linhas `DIVERGENTE`; quem já estava `JÁ CADASTRADO` ficava travado em *Ignorar*, sem jeito de atualizar só o EAN ou o NCM. (2) O UPDATE levava o **dicionário inteiro do cadastro novo** — ou seja, atualizar o NCM de um produto zerava PIS, COFINS, ICMS, peso, estoque mín./máx. e reescrevia data de cadastro e `ATIVO='S'`. E nem chegava a acontecer: iam no `SET` as chaves internas `_ACAO` e `_UNIDADE_CODIGO`, que não são colunas, então o comando morria com **-206**. Agora existe a faixa **“Produto já cadastrado → ‘Atualizar’ grava só estes campos”** (Descrição, NCM, EAN, Unidade, Grupo/Subgrupo, Tipo — marcação lembrada entre sessões), o UPDATE grava **apenas o que está marcado**, célula vazia na planilha **não apaga** o que está no ERP, `JÁ CADASTRADO` pode ser marcado como *Atualizar* (com o botão **🔄 Marcar Já Cadastrados p/ Atualizar** para o lote), e a confirmação diz exatamente o que vai acontecer: *“cadastrar 12 produto(s) novo(s) e atualizar 40 já existente(s) — só NCM, Cód. Barras (EAN), Unidade”* |
+
+### ✅ VERSÃO 4.22 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

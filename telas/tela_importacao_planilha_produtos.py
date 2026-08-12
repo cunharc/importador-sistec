@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import configparser
 import threading
 import os
+import re
 
 from utils.excel_reader import obter_abas_planilha, ler_planilha_produtos
 from utils.firebird_service import FirebirdService
@@ -11,6 +12,20 @@ from utils.importer import FirebirdImporter
 from utils import tema
 
 class TelaImportacaoPlanilhaProdutos(ttk.Frame):
+    # Campos que a acao "Atualizar" pode gravar num produto que ja existe.
+    # (chave, rotulo na tela, colunas da TABELA_PRODUTO)
+    CAMPOS_UPDATE = [
+        ('descricao', 'Descrição', ['PRODUTO_DESCRICAO', 'PRODUTO_DESCRICAO2']),
+        ('ncm', 'NCM', ['PRODUTO_CLASS_FISCAL']),
+        ('ean', 'Cód. Barras (EAN)', ['PRODUTO_CBARRA']),
+        ('unidade', 'Unidade', ['PRODUTO_UNIDADE_CV', 'PRODUTO_UNIDADE_EST',
+                                'PRODUTO_UN_EXP']),
+        ('grupo', 'Grupo/Subgrupo', ['PRODUTO_GRUPO', 'PRODUTO_GRUPO_EMPRESA',
+                                     'PRODUTO_GRUPO_FILIAL', 'PRODUTO_SUBGRUPO',
+                                     'PRODUTO_SUBGRUPO_EMPRESA', 'PRODUTO_SUBGRUPO_FILIAL']),
+        ('tipo', 'Tipo', ['PRODUTO_TIPO', 'PRODUTO_TIPO_PRODUTO_SPED']),
+    ]
+
     def __init__(self, parent, callback_voltar=None):
         super().__init__(parent, padding="10")
         self.parent = parent
@@ -116,8 +131,27 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         ttk.Radiobutton(config_row, text="Seguir planilha", variable=self.var_modo_codigo, value="xml").pack(side=tk.LEFT, padx=2)
         ttk.Radiobutton(config_row, text="Sequencial", variable=self.var_modo_codigo, value="sequencial").pack(side=tk.LEFT, padx=2)
 
+        # === CAMPOS QUE O "ATUALIZAR" GRAVA ===
+        # Sem isso o UPDATE levava o dicionario inteiro do cadastro novo e
+        # zerava tributacao, estoque e datas de um produto que ja existia.
+        frame_upd = ttk.LabelFrame(
+            content, text="Produto já cadastrado → 'Atualizar' grava só estes campos", padding="6")
+        frame_upd.pack(fill=tk.X, pady=2)
+
+        self.vars_update = {}
+        marcados_padrao = {'ncm', 'ean', 'unidade'}
+        for chave, rotulo, _cols in self.CAMPOS_UPDATE:
+            var = tk.BooleanVar(self, value=chave in marcados_padrao)
+            self.vars_update[chave] = var
+            ttk.Checkbutton(frame_upd, text=rotulo, variable=var).pack(side=tk.LEFT, padx=6)
+        tk.Label(frame_upd, text="(célula vazia na planilha não apaga o que está no ERP)",
+                 font=("Segoe UI", 8, "italic"), fg="#666").pack(side=tk.LEFT, padx=10)
+
         # === COLUMN MAPPING ===
-        self.frame_map = ttk.LabelFrame(content, text="Mapeamento de Colunas (Insira a letra: A, B, C...)", padding="8")
+        self.frame_map = ttk.LabelFrame(
+            content, padding="8",
+            text="Mapeamento de Colunas (Insira a letra: A, B, C...)  •  "
+                 "Grupo/Subgrupo aceitam código, descrição ou \"14 - MAIALE DUROC\"")
         self.frame_map.pack(fill=tk.X, pady=4)
         frame_map = self.frame_map
 
@@ -153,6 +187,8 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
 
         ttk.Button(actions_row, text="☑ Marcar Todos", command=self._marcar_todos).pack(side=tk.LEFT, padx=3)
         ttk.Button(actions_row, text="☐ Desmarcar", command=self._desmarcar_todos).pack(side=tk.LEFT, padx=3)
+        ttk.Button(actions_row, text="🔄 Marcar Já Cadastrados p/ Atualizar",
+                   command=self._marcar_atualizar).pack(side=tk.LEFT, padx=3)
 
         self.lbl_hint = tk.Label(actions_row, text="Clique em SEL ou AÇÃO para alterar",
                                  font=("Segoe UI", 8, "italic"), fg="#666")
@@ -168,15 +204,21 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         frame_grade = ttk.Frame(content)
         frame_grade.pack(fill=tk.BOTH, expand=True, pady=4)
 
-        self.colunas = ("SEL", "AÇÃO", "STATUS", "CÓDIGO ANTIGO", "DESCRIÇÃO", "TIPO", "GRUPO", "SUBGRUPO", "NCM", "EAN", "UNID", "CÓD. ATUAL")
+        self.colunas = ("SEL", "AÇÃO", "STATUS", "CÓDIGO ANTIGO", "DESCRIÇÃO NA PLANILHA",
+                        "CÓD. ERP", "DESCRIÇÃO NO ERP", "TIPO", "GRUPO", "SUBGRUPO",
+                        "NCM", "EAN", "UNID", "CÓD. ATUAL")
+        # Índice de cada coluna pelo nome. As posições mudam quando se acrescenta
+        # coluna; ler por nome evita o bug de pegar o valor da coluna vizinha.
+        self._ci = {nome: i for i, nome in enumerate(self.colunas)}
         self.tree = ttk.Treeview(frame_grade, columns=self.colunas, show="headings")
 
         self.tree.bind("<ButtonRelease-1>", self._on_tree_click)
 
-        larguras = [40, 100, 100, 100, 250, 120, 120, 120, 80, 100, 60, 100]
+        larguras = [40, 100, 190, 100, 230, 70, 230, 120, 150, 150, 80, 100, 60, 100]
+        esquerda = {"DESCRIÇÃO NA PLANILHA", "DESCRIÇÃO NO ERP", "GRUPO", "SUBGRUPO"}
         for col, larg in zip(self.colunas, larguras):
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=larg, anchor=tk.CENTER if col != "DESCRIÇÃO" else tk.W)
+            self.tree.column(col, width=larg, anchor=tk.W if col in esquerda else tk.CENTER)
 
         self.tree.tag_configure('ERRO', background=tema.ERROR_CT)
         self.tree.tag_configure('OK', background=tema.SUCCESS_CT)
@@ -243,6 +285,8 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         }
         for chave, ent in self.entradas_map.items():
             self.config['IMPORTACAO_PRODUTOS'][f'mapa_{chave}'] = ent.get().strip()
+        for chave, var in self.vars_update.items():
+            self.config['IMPORTACAO_PRODUTOS'][f'upd_{chave}'] = 'S' if var.get() else 'N'
         with open('config.ini', 'w', encoding='utf-8') as f:
             self.config.write(f)
 
@@ -274,6 +318,10 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 if val:
                     ent.delete(0, tk.END)
                     ent.insert(0, val)
+            for chave, var in self.vars_update.items():
+                val = cfg.get(f'upd_{chave}', '')
+                if val:
+                    var.set(val == 'S')
 
     def _fechar_tela(self):
         self.destroy()
@@ -317,10 +365,13 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
 
             produtos_erp = {}
             codigos_pk_erp = set()   # só PRODUTO_CODIGO (a PK) — sem os auxiliares
+            g_cod = g_desc = s_cod = s_desc = None
             try:
                 with FirebirdService(self.config_db) as fb:
+                    g_cod, g_desc, s_cod, s_desc = self._carregar_grupos_erp(fb, emp, fil)
                     rows = fb.query(
-                        "SELECT PRODUTO_CODIGO, PRODUTO_COD_AUXILIAR, PRODUTO_DESCRICAO "
+                        "SELECT PRODUTO_CODIGO, PRODUTO_COD_AUXILIAR, PRODUTO_DESCRICAO, "
+                        "PRODUTO_CLASS_FISCAL, PRODUTO_UNIDADE_CV "
                         "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?",
                         [emp, fil]
                     )
@@ -328,7 +379,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                         cod = str(row.get('produto_codigo', '')).strip()
                         aux = str(row.get('produto_cod_auxiliar', '')).strip()
                         desc = str(row.get('produto_descricao', '')).strip()
-                        info = {'codigo': cod, 'descricao': desc}
+                        info = {'codigo': cod, 'descricao': desc,
+                                'ncm': str(row.get('produto_class_fiscal') or '').strip(),
+                                'unidade': str(row.get('produto_unidade_cv') or '').strip()}
                         if cod:
                             produtos_erp[cod] = info
                             codigos_pk_erp.add(cod)
@@ -348,14 +401,28 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             # com SQLCODE -803 e a transacao inteira e descartada.
             cod_atual_vistos = {}
 
-            def match_produto(cod_planilha, desc_planilha):
+            def match_produto(cod_planilha, desc_planilha, reg=None):
                 if cod_planilha and cod_planilha in produtos_erp:
                     info = produtos_erp[cod_planilha]
                     desc_erp = info['descricao'].lower().strip()
                     desc_plan = desc_planilha.lower().strip()
-                    if desc_plan == desc_erp or (desc_plan and desc_erp and (desc_plan in desc_erp or desc_erp in desc_plan)):
-                        return 'JÁ CADASTRADO', info
-                    return 'DIVERGENTE', info
+                    # O que exatamente divergiu — antes so dizia "DIVERGENTE" e
+                    # nao havia como saber olhando a tela.
+                    difs = []
+                    if not (desc_plan == desc_erp or (desc_plan and desc_erp and
+                            (desc_plan in desc_erp or desc_erp in desc_plan))):
+                        difs.append('descrição')
+                    ncm_p = re.sub(r'\D', '', str((reg or {}).get('ncm') or ''))
+                    ncm_e = re.sub(r'\D', '', info.get('ncm') or '')
+                    if ncm_p and ncm_e and ncm_p != ncm_e:
+                        difs.append(f"NCM {ncm_e}→{ncm_p}")
+                    un_p = str((reg or {}).get('unidade') or '').strip().upper()[:2]
+                    un_e = (info.get('unidade') or '').strip().upper()[:2]
+                    if un_p and un_e and un_p != un_e:
+                        difs.append(f"unidade {un_e}→{un_p}")
+                    if difs:
+                        return f"DIVERGENTE ({', '.join(difs)})", info
+                    return 'JÁ CADASTRADO', info
                 if desc_planilha:
                     # Só considera duplicado por nome quando a descrição é IDÊNTICA.
                     # (Antes usava "contida em", que cruzava produtos sem relação:
@@ -377,9 +444,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     sel = "☐"
                     acao = "—"
                 else:
-                    match_label, matched_info = match_produto(cod_planilha, desc_planilha)
-                    if match_label == 'DIVERGENTE':
-                        status = "DIVERGENTE"
+                    match_label, matched_info = match_produto(cod_planilha, desc_planilha, reg)
+                    if match_label and match_label.startswith('DIVERGENTE'):
+                        status = match_label
                         tag = "DIVERGENTE"
                         sel = "☐"
                         acao = "Atualizar"
@@ -416,6 +483,49 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 if tipo_id_plan is None:
                     tipo_label = self.cb_tipo.get()
 
+                # Grupo/Subgrupo: a celula pode trazer codigo, descricao ou os
+                # dois. Resolver aqui deixa visivel na grade o que sera gravado
+                # (antes, "14" era tratado como nome e criava um grupo "14").
+                cel_grupo = reg.get('grupo', '')
+                cel_sub = reg.get('subgrupo', '')
+                grupo_id = subgrupo_id = None
+                grupo_lbl = sub_lbl = ''
+                erro_gs = ''
+                if g_cod is not None:
+                    grupo_id, grupo_lbl, err = self._resolver_grupo(cel_grupo, g_cod, g_desc)
+                    if err:
+                        erro_gs = f"Grupo: {err}"
+                    elif not str(cel_grupo).strip():
+                        grupo_lbl = "⚠ sem grupo → 1"
+                    if not str(cel_sub).strip():
+                        # Subgrupo em branco herda o nome do grupo (como antes),
+                        # agora tambem quando o grupo veio por codigo.
+                        cel_sub = (g_cod.get(grupo_id) if grupo_id is not None
+                                   else self._ref_grupo(cel_grupo)[1])
+                    if grupo_id is not None:
+                        subgrupo_id, sub_lbl, err = self._resolver_grupo(
+                            cel_sub, s_cod.get(grupo_id, {}), s_desc.get(grupo_id, {}))
+                        if err and not erro_gs:
+                            erro_gs = f"Subgrupo: {err}"
+                    else:
+                        # o grupo ainda vai ser criado, entao codigo de subgrupo
+                        # nao tem contra o que ser conferido
+                        cod_sub, desc_sub = self._ref_grupo(cel_sub)
+                        if cod_sub is not None and not desc_sub:
+                            if not erro_gs:
+                                erro_gs = (f"Subgrupo: código {cod_sub} não pode ser "
+                                           f"usado porque o grupo ainda será criado")
+                        elif desc_sub:
+                            sub_lbl = f"➕ NOVO: {desc_sub}"
+
+                if erro_gs and tag != "ERRO":
+                    status = f"ERRO ({erro_gs})"
+                    tag, sel, acao = "ERRO", "☐", "—"
+
+                # nomes usados na auto-criacao, quando nao existirem no ERP
+                grupo_desc_nova = self._ref_grupo(cel_grupo)[1]
+                subgrupo_desc_nova = self._ref_grupo(cel_sub)[1]
+
                 item = {
                     'sel': sel, 'acao': acao, 'status': status, 'tag': tag,
                     'codigo_antigo': cod_planilha, 'codigo_atual': cod_atual_planilha,
@@ -424,8 +534,14 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     'desc_erp': matched_info.get('descricao', '') if matched_info else '',
                     'tipo': tipo_label,
                     'tipo_id': tipo_id_plan,
-                    'grupo': reg.get('grupo', ''),
+                    'grupo': cel_grupo,
                     'subgrupo': reg.get('subgrupo', ''),
+                    'grupo_id': grupo_id,
+                    'subgrupo_id': subgrupo_id,
+                    'grupo_label': grupo_lbl,
+                    'subgrupo_label': sub_lbl,
+                    'grupo_desc_nova': grupo_desc_nova,
+                    'subgrupo_desc_nova': subgrupo_desc_nova,
                     'ncm': reg.get('ncm', ''),
                     'ean': reg.get('ean', ''),
                     'unidade': reg.get('unidade', ''),
@@ -444,6 +560,42 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         except Exception as e:
             self.parent.after(0, lambda err=e: messagebox.showerror("Erro", f"Falha na análise:\n{err}"))
             self.parent.after(0, lambda: self.btn_analisar.config(state=tk.NORMAL))
+
+    def _valores_linha(self, item):
+        """Valores da linha, na ordem de self.colunas."""
+        return (
+            item['sel'], item['acao'], item['status'],
+            item['codigo_antigo'], item['descricao'],
+            item.get('codigo_erp', ''), item.get('desc_erp', ''),
+            item['tipo'],
+            item.get('grupo_label') or item.get('grupo', ''),
+            item.get('subgrupo_label') or item.get('subgrupo', ''),
+            item['ncm'], item['ean'], item['unidade'],
+            item.get('codigo_atual', ''),
+        )
+
+    def _dados_linha(self, item):
+        """O que a importação precisa da linha (guardado por item_id da grade)."""
+        return {
+            'codigo_antigo': item['codigo_antigo'],
+            'codigo_atual': item.get('codigo_atual', ''),
+            'descricao': item['descricao'],
+            'codigo_erp': item.get('codigo_erp', ''),
+            'desc_erp': item.get('desc_erp', ''),
+            'tipo': item.get('tipo', ''),
+            'tipo_id': item.get('tipo_id'),
+            'grupo': item.get('grupo', ''),
+            'subgrupo': item.get('subgrupo', ''),
+            'grupo_id': item.get('grupo_id'),
+            'subgrupo_id': item.get('subgrupo_id'),
+            'grupo_desc_nova': item.get('grupo_desc_nova', ''),
+            'subgrupo_desc_nova': item.get('subgrupo_desc_nova', ''),
+            'ncm': item['ncm'],
+            'ean': item['ean'],
+            'unidade': item['unidade'],
+            'tipo_prod_producao': item.get('tipo_prod_producao', ''),
+            '_status': 'OK' if item['tag'] == 'NOVO' else 'SKIP',
+        }
 
     def _renderizar_preview(self):
         # Selo deste render. A grade e preenchida em blocos com after(), entao um
@@ -474,34 +626,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             dados = self.dados_analisados
             for i in range(start_idx, end_idx):
                 item = dados[i]
-
-                # Auto-preenche subgrupo com grupo se vazio
-                if str(item.get('grupo', '')).strip() and not str(item.get('subgrupo', '')).strip():
-                    item['subgrupo'] = item['grupo']
-
-                item_id = self.tree.insert("", tk.END, values=(
-                    item['sel'], item['acao'], item['status'],
-                    item['codigo_antigo'], item['descricao'],
-                    item['tipo'], item['grupo'],
-                    item['subgrupo'], item['ncm'],
-                    item['ean'], item['unidade'], item.get('codigo_atual', '')
-                ), tags=(item['tag'],))
-                self.dados_grid[item_id] = {
-                    'codigo_antigo': item['codigo_antigo'],
-                    'codigo_atual': item.get('codigo_atual', ''),
-                    'descricao': item['descricao'],
-                    'codigo_erp': item.get('codigo_erp', ''),
-                    'desc_erp': item.get('desc_erp', ''),
-                    'tipo': item.get('tipo', ''),
-                    'tipo_id': item.get('tipo_id'),
-                    'grupo': item['grupo'],
-                    'subgrupo': item['subgrupo'],
-                    'ncm': item['ncm'],
-                    'ean': item['ean'],
-                    'unidade': item['unidade'],
-                    'tipo_prod_producao': item.get('tipo_prod_producao', ''),
-                    '_status': 'OK' if item['tag'] == 'NOVO' else 'SKIP'
-                }
+                item_id = self.tree.insert("", tk.END, values=self._valores_linha(item),
+                                           tags=(item['tag'],))
+                self.dados_grid[item_id] = self._dados_linha(item)
 
             if end_idx < total:
                 self.lbl_status.config(text=f"Renderizando {end_idx}/{total}...")
@@ -511,7 +638,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 self.btn_analisar.config(state=tk.NORMAL)
                 novo_count = sum(1 for d in dados if d['tag'] == 'NOVO')
                 div_count = sum(1 for d in dados if d['tag'] == 'DIVERGENTE')
-                if novo_count > 0 or div_count > 0:
+                # 'JÁ CADASTRADO' agora tambem pode ser atualizado, entao o botao
+                # nao depende mais de existir novo/divergente
+                if any(self._ciclo_acoes(d['status']) for d in dados):
                     self.btn_importar.config(state=tk.NORMAL)
                 self.progresso['value'] = 100
                 status_parts = [f"{novo_count} novos"]
@@ -533,7 +662,7 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             if dg.get('tipo_id'):  # tipo veio mapeado da planilha, nao sobrescreve
                 continue
             valores = list(self.tree.item(item, "values"))
-            valores[5] = novo_tipo
+            valores[self._ci['TIPO']] = novo_tipo
             self.tree.item(item, values=valores)
 
     def _resolver_tipo(self, valor):
@@ -561,6 +690,96 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         tid = nomes.get(chave)
         return (tid, labels[tid]) if tid else (None, '')
 
+    # ============ Grupo / Subgrupo: aceita código OU descrição ============
+
+    @staticmethod
+    def _ref_grupo(valor):
+        """Interpreta a célula de Grupo/Subgrupo da planilha.
+
+        Aceita as três formas que o cliente usa: código ("14", ou "14.0" quando
+        o Excel entrega a célula como número), descrição ("MAIALE DUROC") ou as
+        duas juntas ("14 - MAIALE DUROC"). Devolve (codigo|None, descrição|'').
+        """
+        v = str(valor or '').strip()
+        if not v:
+            return None, ''
+        m = re.match(r'^(\d+)(?:[.,]0+)?$', v)
+        if m:
+            return int(m.group(1)), ''
+        # "14 - MAIALE DUROC": exige letra depois do traço para não quebrar
+        # descrição do tipo "13-15 KG".
+        m = re.match(r'^(\d+)\s*[-–]\s*([^\W\d_].*)$', v, re.UNICODE)
+        if m:
+            return int(m.group(1)), m.group(2).strip().upper()
+        return None, v.upper()
+
+    @staticmethod
+    def _resolver_grupo(valor, por_codigo, por_desc):
+        """Resolve a célula contra o cadastro do ERP.
+
+        por_codigo: {codigo: descricao} | por_desc: {DESCRICAO: codigo}
+        Devolve (codigo|None, label, erro|''):
+          - achou            -> (14, '14 - MAIALE DUROC', '')
+          - vazio            -> (None, '', '')
+          - descrição nova   -> (None, '➕ NOVO: LINGUICAS', '')   (será criada)
+          - código inexistente -> (None, '', 'Grupo 99 não existe no ERP')
+        """
+        cod, desc = TelaImportacaoPlanilhaProdutos._ref_grupo(valor)
+        if cod is None and not desc:
+            return None, '', ''
+        if cod is not None:
+            if cod in por_codigo:
+                return cod, f"{cod} - {por_codigo[cod]}", ''
+            # veio código, mas ele não existe: criar um grupo chamado "99" seria
+            # lixo no cadastro do cliente, então a linha para aqui.
+            if desc and desc in por_desc:
+                achado = por_desc[desc]
+                return achado, f"{achado} - {por_codigo[achado]}", ''
+            return None, '', f"código {cod} não existe no ERP"
+        if desc in por_desc:
+            achado = por_desc[desc]
+            return achado, f"{achado} - {por_codigo[achado]}", ''
+        return None, f"➕ NOVO: {desc}", ''
+
+    def _carregar_grupos_erp(self, fb, emp, fil):
+        """Lê grupos e subgrupos do ERP para resolver as células da planilha."""
+        g_cod, g_desc = {}, {}
+        for g in fb.query("SELECT GRUPO_CODIGO, GRUPO_DESCRICAO FROM TABELA_GRUPO "
+                          "WHERE GRUPO_EMPRESA = ? AND GRUPO_FILIAL = ?", [emp, fil]):
+            cod = int(g.get('grupo_codigo') or 0)
+            desc = str(g.get('grupo_descricao') or '').strip().upper()
+            g_cod[cod] = desc
+            g_desc.setdefault(desc, cod)
+        # subgrupo é por grupo: o código 1 existe em vários grupos
+        s_cod, s_desc = {}, {}
+        for s in fb.query("SELECT SUBGRUPO_CODIGO, SUBGRUPO_DESCRICAO, SUBGRUPO_GRUPO "
+                          "FROM TABELA_SUBGRUPO WHERE SUBGRUPO_EMPRESA = ? "
+                          "AND SUBGRUPO_FILIAL = ?", [emp, fil]):
+            grp = int(s.get('subgrupo_grupo') or 0)
+            cod = int(s.get('subgrupo_codigo') or 0)
+            desc = str(s.get('subgrupo_descricao') or '').strip().upper()
+            s_cod.setdefault(grp, {})[cod] = desc
+            s_desc.setdefault(grp, {}).setdefault(desc, cod)
+        return g_cod, g_desc, s_cod, s_desc
+
+    @staticmethod
+    def _ciclo_acoes(status):
+        """Ações possíveis para a linha, na ordem em que o clique alterna.
+        A primeira é a que o ☑ assume. Lista vazia = linha travada."""
+        if "ERRO" in status:
+            return []
+        if status == "NOVO":
+            return ["Importar", "Ignorar"]
+        if "DIVERGENTE" in status:
+            return ["Atualizar", "Criar Novo", "Ignorar"]
+        if "~desc" in status:
+            return ["Criar Novo", "Atualizar", "Ignorar"]
+        if "JÁ CADASTRADO" in status:
+            # antes ficava travado em "Ignorar"; agora permite atualizar os
+            # campos marcados na tela (NCM, EAN, unidade...)
+            return ["Atualizar", "Ignorar"]
+        return []
+
     def _on_tree_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
         if region != "cell": return
@@ -571,33 +790,19 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
         valores = list(self.tree.item(item_id, 'values'))
         status = valores[2]  # STATUS está no índice 2
         if "ERRO" in status: return
-        eh_exato = (status == "JÁ CADASTRADO")
+        ciclo = self._ciclo_acoes(status)
+        if not ciclo: return
 
         if column == "#1":  # SEL
-            if eh_exato: return
             if valores[0] == "☑":
                 valores[0] = "☐"
                 valores[1] = "Ignorar"
             else:
                 valores[0] = "☑"
-                if status == "NOVO":
-                    valores[1] = "Importar"
-                elif "DIVERGENTE" in status:
-                    valores[1] = "Atualizar"
-                elif "~desc" in status:
-                    valores[1] = "Criar Novo"
+                valores[1] = ciclo[0]
             self.tree.item(item_id, values=valores)
 
         elif column == "#2":  # AÇÃO
-            if eh_exato: return
-            if status == "NOVO":
-                ciclo = ["Importar", "Ignorar"]
-            elif "DIVERGENTE" in status:
-                ciclo = ["Atualizar", "Criar Novo", "Ignorar"]
-            elif "~desc" in status:
-                ciclo = ["Criar Novo", "Ignorar"]
-            else:
-                return
             try:
                 idx = ciclo.index(valores[1])
                 valores[1] = ciclo[(idx + 1) % len(ciclo)]
@@ -607,21 +812,38 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             self.tree.item(item_id, values=valores)
 
     def _marcar_todos(self):
+        """Marca novos/divergentes. Nao mexe nos 'JÁ CADASTRADO' exatos —
+        atualizar em massa quem ja esta certo tem botao proprio."""
         for item in self.tree.get_children():
             v = list(self.tree.item(item, "values"))
             st = v[2]
-            if st == "NOVO":
-                v[0] = "☑"
-                v[1] = "Importar"
-                self.tree.item(item, values=v)
-            elif "DIVERGENTE" in st:
-                v[0] = "☑"
-                v[1] = "Atualizar"
-                self.tree.item(item, values=v)
-            elif "~desc" in st:
-                v[0] = "☑"
-                v[1] = "Criar Novo"
-                self.tree.item(item, values=v)
+            if st.startswith("JÁ CADASTRADO") and "~desc" not in st:
+                continue
+            ciclo = self._ciclo_acoes(st)
+            if not ciclo:
+                continue
+            v[0] = "☑"
+            v[1] = ciclo[0]
+            self.tree.item(item, values=v)
+
+    def _marcar_atualizar(self):
+        """Marca para 'Atualizar' tudo que ja existe no ERP (exato, divergente
+        ou casado pela descricao)."""
+        n = 0
+        for item in self.tree.get_children():
+            v = list(self.tree.item(item, "values"))
+            if "Atualizar" not in self._ciclo_acoes(v[2]):
+                continue
+            if not str(self.dados_grid.get(item, {}).get('codigo_erp', '')).strip():
+                continue
+            v[0] = "☑"
+            v[1] = "Atualizar"
+            self.tree.item(item, values=v)
+            n += 1
+        campos = [r for c, r, _ in self.CAMPOS_UPDATE if self.vars_update[c].get()]
+        self.lbl_status.config(
+            text=f"{n} linha(s) marcadas para Atualizar "
+                 f"({', '.join(campos) if campos else 'NENHUM campo marcado!'})")
 
     def _desmarcar_todos(self):
         for item in self.tree.get_children():
@@ -656,31 +878,9 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             if tags_ativas is not None and item['tag'] not in tags_ativas:
                 continue
             count += 1
-
-            if str(item.get('grupo', '')).strip() and not str(item.get('subgrupo', '')).strip():
-                item['subgrupo'] = item['grupo']
-
-            item_id = self.tree.insert("", tk.END, values=(
-                item['sel'], item['acao'], item['status'],
-                item['codigo_antigo'], item['descricao'],
-                item['tipo'], item['grupo'],
-                item['subgrupo'], item['ncm'],
-                item['ean'], item['unidade']
-            ), tags=(item['tag'],))
-            self.dados_grid[item_id] = {
-                'codigo_antigo': item['codigo_antigo'],
-                'descricao': item['descricao'],
-                'codigo_erp': item.get('codigo_erp', ''),
-                'desc_erp': item.get('desc_erp', ''),
-                'tipo': item.get('tipo', ''),
-                'tipo_id': item.get('tipo_id'),
-                'grupo': item['grupo'],
-                'subgrupo': item['subgrupo'],
-                'ncm': item['ncm'],
-                'ean': item['ean'],
-                'unidade': item['unidade'],
-                '_status': 'OK' if item['tag'] == 'NOVO' else 'SKIP'
-            }
+            item_id = self.tree.insert("", tk.END, values=self._valores_linha(item),
+                                       tags=(item['tag'],))
+            self.dados_grid[item_id] = self._dados_linha(item)
 
         self.lbl_filtro_info.config(text=f"Exibindo {count} de {total} registros")
 
@@ -697,7 +897,25 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             messagebox.showwarning("Aviso", "Selecione pelo menos um produto para importar.")
             return
 
-        resp = messagebox.askyesno("Confirmar", f"Deseja injetar os {len(selecionados)} produtos selecionados e seus grupos no Banco de Dados?\nEssa ação não pode ser desfeita.")
+        n_upd = sum(1 for d in selecionados if d.get('_acao') == 'Atualizar')
+        n_ins = len(selecionados) - n_upd
+        campos = [r for c, r, _cols in self.CAMPOS_UPDATE if self.vars_update[c].get()]
+        if n_upd and not campos:
+            return messagebox.showwarning(
+                "Aviso", f"{n_upd} linha(s) estão como 'Atualizar', mas nenhum campo "
+                         f"está marcado em \"Produto já cadastrado → 'Atualizar' grava "
+                         f"só estes campos\".\n\nMarque o que deve ser atualizado "
+                         f"(NCM, EAN, unidade...) ou troque a ação para Ignorar.")
+
+        partes = []
+        if n_ins:
+            partes.append(f"cadastrar {n_ins} produto(s) novo(s)")
+        if n_upd:
+            partes.append(f"atualizar {n_upd} já existente(s) — só {', '.join(campos)}")
+        resp = messagebox.askyesno(
+            "Confirmar",
+            "Deseja " + " e ".join(partes) + " no Banco de Dados?\n"
+            "Essa ação não pode ser desfeita.")
         if resp:
             self.btn_importar.config(state=tk.DISABLED)
             self.btn_analisar.config(state=tk.DISABLED)
@@ -708,8 +926,67 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             prod_sistec = 'S' if self.var_producao.get() else 'N'
             modo_codigo = self.var_modo_codigo.get()
             copiar_cod_import = self.var_copiar_cod_import.get()
+            campos_update = {c for c, _r, _cols in self.CAMPOS_UPDATE
+                             if self.vars_update[c].get()}
 
-            threading.Thread(target=self._importacao_bg, args=(selecionados, tipo_sel, prod_sistec, modo_codigo, copiar_cod_import), daemon=True).start()
+            threading.Thread(target=self._importacao_bg,
+                             args=(selecionados, tipo_sel, prod_sistec, modo_codigo,
+                                   copiar_cod_import, campos_update),
+                             daemon=True).start()
+
+    def _resolver_ids_gravacao(self, fb, emp, fil, grupo_id, subgrupo_id,
+                               desc_grupo, desc_sub, mapa_grupos, mapa_subgrupos):
+        """Devolve (grupo_id, subgrupo_id) para gravar.
+
+        O que a análise já resolveu (por código ou por descrição existente) é
+        usado direto. Só cria grupo/subgrupo quando a planilha trouxe um nome
+        que não existe no ERP — e nunca cria grupo chamado "14", porque código
+        inexistente já barra a linha na análise.
+        """
+        if grupo_id is None and desc_grupo:
+            if desc_grupo in mapa_grupos:
+                grupo_id = mapa_grupos[desc_grupo]
+            else:
+                res = fb.query("SELECT COALESCE(MAX(GRUPO_CODIGO), 0) + 1 AS NOVO FROM TABELA_GRUPO WHERE GRUPO_EMPRESA = ? AND GRUPO_FILIAL = ?", [emp, fil])
+                grupo_id = int(res[0]['novo'])
+                fb.execute("INSERT INTO TABELA_GRUPO (GRUPO_EMPRESA, GRUPO_FILIAL, GRUPO_CODIGO, GRUPO_DESCRICAO) VALUES (?, ?, ?, ?)", [emp, fil, grupo_id, desc_grupo[:60]])
+                mapa_grupos[desc_grupo] = grupo_id
+
+        if grupo_id is None:
+            return 1, 1
+
+        if subgrupo_id is None and desc_sub:
+            chave_sub = f"{grupo_id}_{desc_sub}"
+            if chave_sub in mapa_subgrupos:
+                subgrupo_id = mapa_subgrupos[chave_sub]
+            else:
+                res = fb.query("SELECT COALESCE(MAX(SUBGRUPO_CODIGO), 0) + 1 AS NOVO FROM TABELA_SUBGRUPO WHERE SUBGRUPO_EMPRESA = ? AND SUBGRUPO_FILIAL = ? AND SUBGRUPO_GRUPO = ?", [emp, fil, grupo_id])
+                subgrupo_id = int(res[0]['novo'])
+                fb.execute("INSERT INTO TABELA_SUBGRUPO (SUBGRUPO_EMPRESA, SUBGRUPO_FILIAL, SUBGRUPO_GRUPO_EMPRESA, SUBGRUPO_GRUPO_FILIAL, SUBGRUPO_GRUPO, SUBGRUPO_CODIGO, SUBGRUPO_DESCRICAO) VALUES (?, ?, ?, ?, ?, ?, ?)", [emp, fil, emp, fil, grupo_id, subgrupo_id, desc_sub[:60]])
+                mapa_subgrupos[chave_sub] = subgrupo_id
+
+        return grupo_id, (subgrupo_id if subgrupo_id is not None else 1)
+
+    def _montar_update(self, item, base, campos_on):
+        """SET do UPDATE: só os campos marcados na tela e que realmente têm
+        valor na planilha (célula vazia não apaga o que está no ERP)."""
+        tem_valor = {
+            'descricao': bool(str(item.get('descricao', '')).strip()),
+            'ncm': bool(str(item.get('ncm', '')).strip()),
+            'ean': bool(base.get('PRODUTO_CBARRA')),
+            'unidade': bool(str(item.get('unidade', '')).strip()),
+            'grupo': item.get('grupo_id') is not None or bool(
+                str(item.get('grupo_desc_nova') or '').strip()),
+            'tipo': True,
+        }
+        upd = {}
+        for chave, _rotulo, colunas in self.CAMPOS_UPDATE:
+            if chave not in campos_on or not tem_valor.get(chave):
+                continue
+            for col in colunas:
+                if col in base:
+                    upd[col] = base[col]
+        return upd
 
     @staticmethod
     def _sanitizar(texto):
@@ -717,8 +994,11 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
             return texto
         return texto.encode('cp1252', errors='replace').decode('cp1252')
 
-    def _importacao_bg(self, selecionados, tipo_sel, prod_sistec, modo_codigo='xml', copiar_cod_import=False):
+    def _importacao_bg(self, selecionados, tipo_sel, prod_sistec, modo_codigo='xml',
+                       copiar_cod_import=False, campos_update=None):
         sucesso = False
+        campos_update = set(campos_update or ())
+        sem_campo_update = []          # marcados p/ Atualizar sem nenhum campo a gravar
         tipos_prod_ignorados = set()   # valores de "Tipo Prod. Produção" que não eram numéricos
         try:
             emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
@@ -748,30 +1028,16 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     for campo_str in ['descricao', 'grupo', 'subgrupo', 'ncm', 'ean', 'unidade']:
                         item[campo_str] = self._sanitizar(item.get(campo_str, ''))
 
-                    # Auto-Criação de Grupo
-                    desc_grupo = str(item.get('grupo', '')).strip().upper()
-                    if not desc_grupo: grupo_id = 1
-                    elif desc_grupo in mapa_grupos: grupo_id = mapa_grupos[desc_grupo]
-                    else:
-                        res = fb.query("SELECT COALESCE(MAX(GRUPO_CODIGO), 0) + 1 AS NOVO FROM TABELA_GRUPO WHERE GRUPO_EMPRESA = ? AND GRUPO_FILIAL = ?", [emp, fil])
-                        grupo_id = int(res[0]['novo'])
-                        fb.execute("INSERT INTO TABELA_GRUPO (GRUPO_EMPRESA, GRUPO_FILIAL, GRUPO_CODIGO, GRUPO_DESCRICAO) VALUES (?, ?, ?, ?)", [emp, fil, grupo_id, desc_grupo[:60]])
-                        mapa_grupos[desc_grupo] = grupo_id
-
-                    # Auto-Criação de Subgrupo
-                    desc_sub = str(item.get('subgrupo', '')).strip().upper()
-                    if not desc_sub and desc_grupo:
-                        desc_sub = desc_grupo
-                        
-                    if not desc_sub: subgrupo_id = 1
-                    else:
-                        chave_sub = f"{grupo_id}_{desc_sub}"
-                        if chave_sub in mapa_subgrupos: subgrupo_id = mapa_subgrupos[chave_sub]
-                        else:
-                            res = fb.query("SELECT COALESCE(MAX(SUBGRUPO_CODIGO), 0) + 1 AS NOVO FROM TABELA_SUBGRUPO WHERE SUBGRUPO_EMPRESA = ? AND SUBGRUPO_FILIAL = ? AND SUBGRUPO_GRUPO = ?", [emp, fil, grupo_id])
-                            subgrupo_id = int(res[0]['novo'])
-                            fb.execute("INSERT INTO TABELA_SUBGRUPO (SUBGRUPO_EMPRESA, SUBGRUPO_FILIAL, SUBGRUPO_GRUPO_EMPRESA, SUBGRUPO_GRUPO_FILIAL, SUBGRUPO_GRUPO, SUBGRUPO_CODIGO, SUBGRUPO_DESCRICAO) VALUES (?, ?, ?, ?, ?, ?, ?)", [emp, fil, emp, fil, grupo_id, subgrupo_id, desc_sub[:60]])
-                            mapa_subgrupos[chave_sub] = subgrupo_id
+                    # Grupo/Subgrupo já resolvidos na análise (célula podia trazer
+                    # código, descrição ou os dois). Só cai na auto-criação quando
+                    # a descrição não existe no ERP.
+                    grupo_id = item.get('grupo_id')
+                    subgrupo_id = item.get('subgrupo_id')
+                    desc_grupo = str(item.get('grupo_desc_nova') or '').strip().upper()
+                    desc_sub_nova = str(item.get('subgrupo_desc_nova') or '').strip().upper()
+                    grupo_id, subgrupo_id = self._resolver_ids_gravacao(
+                        fb, emp, fil, grupo_id, subgrupo_id, desc_grupo,
+                        desc_sub_nova, mapa_grupos, mapa_subgrupos)
 
                     # Proteção da Unidade vazia
                     unidade_planilha = str(item.get('unidade', '')).strip().upper()
@@ -798,17 +1064,27 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                     if acao == "Atualizar":
                         codigo_erp = str(item.get('codigo_erp', '')).strip()
                         if codigo_erp:
-                            update_dict = DataTransformer.prepare_produto(xml_mock, config_prod, classificacao)
-                            update_dict['PRODUTO_CODIGO'] = codigo_erp
-                            if tipo_prod_prod:
-                                update_dict['PRODUTO_TIPO_PROD_PRODUCAO'] = tipo_prod_prod
-                            # Flag: leva o código antigo para Auxiliar + Importação
+                            base = DataTransformer.prepare_produto(xml_mock, config_prod, classificacao)
+                            # Antes ia o dicionario inteiro do cadastro novo, o que
+                            # zerava tributacao, estoque, peso e datas de um produto
+                            # que ja existia. Agora vao so os campos marcados.
+                            update_dict = self._montar_update(item, base, campos_update)
                             cod_ant_upd = str(item.get('codigo_antigo', '')).strip()
                             if copiar_cod_import and cod_ant_upd:
                                 update_dict['PRODUTO_COD_AUXILIAR'] = cod_ant_upd
                                 update_dict['PRODUTO_COD_IMPORTACAO'] = cod_ant_upd
-                            update_dict['_ACAO'] = 'UPDATE'
-                            produtos_para_atualizar.append(update_dict)
+                            if tipo_prod_prod and 'tipo' in campos_update:
+                                update_dict['PRODUTO_TIPO_PROD_PRODUCAO'] = tipo_prod_prod
+                            if not update_dict:
+                                sem_campo_update.append(item.get('descricao', ''))
+                            else:
+                                update_dict['PRODUTO_EMPRESA'] = emp
+                                update_dict['PRODUTO_FILIAL'] = fil
+                                update_dict['PRODUTO_DATA_ALT'] = base['PRODUTO_DATA_ALT']
+                                update_dict['PRODUTO_ULT_GRAVACAO'] = base['PRODUTO_ULT_GRAVACAO']
+                                update_dict['PRODUTO_CODIGO'] = codigo_erp
+                                update_dict['_ACAO'] = 'UPDATE'
+                                produtos_para_atualizar.append(update_dict)
                     else:
                         # "Importar" ou "Criar Novo"
                         cod_antigo = str(item.get('codigo_antigo', '')).strip()
@@ -863,6 +1139,11 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                 msg = f"Processamento concluído!\n\n{', '.join(partes) if partes else 'Nenhum'} produto processado com sucesso."
                 if erros:
                     msg += f"\n\nHouve {len(erros)} erro(s) durante a importação. Veja o log para mais detalhes."
+                if sem_campo_update:
+                    msg += (f"\n\n⚠️ {len(sem_campo_update)} linha(s) marcadas para "
+                            f"Atualizar não tinham nada a gravar (os campos marcados "
+                            f"estão vazios na planilha) — ex.: "
+                            f"{', '.join(sem_campo_update[:3])}")
                 if tipos_prod_ignorados:
                     exemplos = ', '.join(sorted(tipos_prod_ignorados)[:5])
                     msg += (f"\n\n⚠️ 'Tipo Prod. Produção' é um campo numérico — "
