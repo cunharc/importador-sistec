@@ -77,6 +77,10 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
                                                self._iniciar_analise)
         self.btn_analisar.pack(fill=tk.X)
 
+        self.btn_conciliar = tema.botao_sidebar(sidebar, "🔗   Conciliação Planilha × ERP",
+                                                self._abrir_conciliacao)
+        self.btn_conciliar.pack(fill=tk.X)
+
         self.btn_importar = tema.botao_sidebar(sidebar, "🚀   Processar e Injetar no ERP",
                                                self._iniciar_importacao, cor_fg="#7EE0A0")
         self.btn_importar.config(state=tk.DISABLED)
@@ -326,6 +330,38 @@ class TelaImportacaoPlanilhaProdutos(ttk.Frame):
     def _fechar_tela(self):
         self.destroy()
         if self.callback_voltar: self.callback_voltar()
+
+    def _abrir_conciliacao(self):
+        """Abre a conciliação (tela separada, só leitura) sobre a planilha atual.
+        Se a planilha ainda não foi lida, lê agora — não precisa analisar antes."""
+        from telas.tela_conciliacao_produtos import TelaConciliacaoProdutos
+
+        registros = self.registros_lidos
+        if not registros:
+            aba = self.cb_abas.get()
+            if not self.caminho_arquivo or not aba:
+                return messagebox.showwarning(
+                    "Aviso", "Selecione o arquivo e a aba da planilha antes de conciliar.")
+            mapa_colunas = {c: e.get().strip() for c, e in self.entradas_map.items()}
+            if not mapa_colunas.get('descricao'):
+                return messagebox.showwarning(
+                    "Aviso", "Mapeie a letra da coluna 'Descrição' antes de conciliar.")
+            try:
+                linha_ini = int(self.ent_linha_ini.get())
+            except ValueError:
+                return messagebox.showerror("Erro", "A linha inicial deve ser um número.")
+            try:
+                registros = ler_planilha_produtos(self.caminho_arquivo, aba,
+                                                  mapa_colunas, linha_ini)
+            except Exception as e:
+                return messagebox.showerror("Erro", f"Falha ao ler a planilha:\n{e}")
+            if not registros:
+                return messagebox.showwarning("Aviso", "Nenhum registro encontrado na planilha.")
+            self.registros_lidos = registros
+
+        emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
+        fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
+        TelaConciliacaoProdutos(self.winfo_toplevel(), self.config_db, registros, emp, fil)
 
     def _iniciar_analise(self):
         aba = self.cb_abas.get()

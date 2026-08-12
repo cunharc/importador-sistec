@@ -3,14 +3,20 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.23                            │
+│                      VERSÃO 4.24                            │
 │                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.23 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.24 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Produtos Planilha | ✅ PRONTO | **Nova tela de Conciliação Planilha × ERP** (botão **🔗 Conciliação Planilha × ERP** no menu da importação por Excel). Janela separada, **somente leitura — não grava nada**, feita para conferir *antes* de importar. Uma linha por linha da planilha, nesta sequência: **CÓDIGO ERP • CÓDIGO EXCEL • CÓDIGO IMPORTAÇÃO • CÓDIGO AUXILIAR • DESCRIÇÃO ERP • DESCRIÇÃO EXCEL**, com **CASOU POR** e **SITUAÇÃO** no fim. O `CASOU POR` é o que permite confiar no vínculo: diz se casou por código do ERP, por código de importação, por código auxiliar ou **por descrição** — este último é o que mais engana. A situação avisa o que exige decisão: `DESCRIÇÃO DIFERENTE`, `AMBÍGUO: também casa com 10, 107`, `SÓ NA PLANILHA (será cadastrado)`, `• INATIVO no ERP` e **`2 linhas da planilha apontam para este produto`** — duas linhas caindo no mesmo produto viram atualização em cima de atualização e não apareciam em lugar nenhum. Filtro (TODOS / CASADOS / SÓ NA PLANILHA / SÓ NO ERP / DESCRIÇÃO DIFERENTE), busca por código ou descrição, **colunas ordenáveis** (número ordena como número, vazio no fim), cores por situação, contadores no topo e **exportação CSV** do que está na tela. Opcionalmente mostra também os **produtos do ERP que a planilha não trouxe** — a outra ponta da conciliação. Não exige análise prévia: se a planilha ainda não foi lida, o botão lê na hora com o mapeamento da tela |
+
+### ✅ VERSÃO 4.23 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
