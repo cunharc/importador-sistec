@@ -414,7 +414,8 @@ class TelaImportacaoNFe(ttk.Frame):
                                "antes de importar. Na aba 3, DUPLO CLIQUE na linha abre o produto do "
                                "XML e o do ERP lado a lado para conferir (e desempata código AMBÍGUO). "
                                "Na aba 4, clique na coluna SEL para marcar/desmarcar e no botão direito "
-                               "para copiar a chave da NF-e.",
+                               "para copiar a chave da NF-e. Clique no CABEÇALHO de qualquer coluna "
+                               "para ordenar (clique de novo inverte).",
                  font=("Segoe UI", 8), bg=tema.BG_BASE, fg="#555").pack(anchor=tk.W, padx=5)
 
     def _criar_aba(self, chave, titulo, colunas, larguras):
@@ -422,7 +423,9 @@ class TelaImportacaoNFe(ttk.Frame):
         self.abas.add(frame, text=titulo)
         tree = ttk.Treeview(frame, columns=colunas, show="headings")
         for col, larg in zip(colunas, larguras):
-            tree.heading(col, text=col)
+            # clique no cabeçalho ordena por aquela coluna (2º clique inverte)
+            tree.heading(col, text=col,
+                         command=lambda t=tree, c=col: self._ordenar_aba(t, c))
             anchor = tk.W if col in ("RAZÃO SOCIAL", "DESCRIÇÃO NO XML", "DESCRIÇÃO NO ERP",
                                      "CONTRAPARTE", "MOTIVO", "CIDADE") else tk.CENTER
             tree.column(col, width=larg, anchor=anchor)
@@ -434,7 +437,67 @@ class TelaImportacaoNFe(ttk.Frame):
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self._grids[chave] = {}
         tree._chave_aba = chave
+        tree._ordem = None          # (coluna, invertida) da ordenação em vigor
         return tree
+
+    # ------------------------------------------------ ORDENAR PELO CABEÇALHO
+    @staticmethod
+    def _chave_ordem(valor):
+        """Chave de ordenação que trata número como número e data como data.
+
+        Sem isto o Treeview compararia texto e a coluna ITENS ordenaria
+        1, 10, 2, 3 — e VALOR ("R$ 1.234,56") ordenaria pelo símbolo. A tupla
+        separa em três grupos para não comparar tipos diferentes: 0 numérico/data,
+        1 texto, 2 vazio (o '—' das células sem valor, que vai para o fim).
+        """
+        s = str(valor if valor is not None else '').strip()
+        if s in ('', '—', '-'):
+            return (2, 0.0, '')
+        d = re.fullmatch(r'(\d{2})/(\d{2})/(\d{4})', s)
+        if d:
+            return (0, float(f"{d.group(3)}{d.group(2)}{d.group(1)}"), '')
+        n = s.replace('R$', '').replace('%', '').replace(' ', '')
+        if re.fullmatch(r'-?\d{1,3}(\.\d{3})+(,\d+)?', n):      # 1.234,56 (BR)
+            n = n.replace('.', '').replace(',', '.')
+        elif re.fullmatch(r'-?\d+(,\d+)?', n):                  # 12 / 12,5
+            n = n.replace(',', '.')
+        elif not re.fullmatch(r'-?\d+(\.\d+)?', n):             # 12 / 12.5
+            n = None
+        if n is not None:
+            try:
+                return (0, float(n), '')
+            except ValueError:
+                pass
+        return (1, 0.0, s.upper())
+
+    def _ordenar_aba(self, tree, coluna):
+        """Ordena a grade pela coluna clicada; clicar de novo inverte."""
+        atual, invertida = tree._ordem or (None, False)
+        invertida = not invertida if atual == coluna else False
+        tree._ordem = (coluna, invertida)
+        self._aplicar_ordem(tree)
+
+    def _aplicar_ordem(self, tree):
+        """Reordena as linhas conforme `tree._ordem` e marca o cabeçalho.
+
+        Chamada também no fim do render: a grade da aba 4 é montada em pedaços,
+        e sem isto os pedaços que chegam depois de um clique ficariam no fim,
+        fora da ordem escolhida.
+        """
+        if not getattr(tree, '_ordem', None):
+            return
+        coluna, invertida = tree._ordem
+        try:
+            itens = list(tree.get_children(''))
+            itens.sort(key=lambda i: self._chave_ordem(tree.set(i, coluna)),
+                       reverse=invertida)
+            for pos, iid in enumerate(itens):
+                tree.move(iid, '', pos)
+            for c in tree['columns']:
+                seta = (' ▼' if invertida else ' ▲') if c == coluna else ''
+                tree.heading(c, text=f"{c}{seta}")
+        except tk.TclError:
+            pass                     # tela fechada no meio
 
     def _criar_card(self, parent, titulo, valor_inicial, cor_texto):
         card = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#CCCCCC",
@@ -1203,7 +1266,12 @@ class TelaImportacaoNFe(ttk.Frame):
                     info = dict(trocado)
                     info['trocado_na_tela'] = True
                     campo = 'escolha na tela'
-            if cod in self._prod_novo:
+            # "cadastrar como novo" só faz sentido enquanto não existe produto com
+            # este código EXATO. Depois de cadastrar, o código passa a casar exato
+            # (vai para o COD_IMPORTACAO) e a decisão morre sozinha — senão a linha
+            # voltaria a pedir um cadastro que já foi feito e a nota nunca entraria.
+            achado_exato = bool(info) and not info.get('casou_degradado')
+            if cod in self._prod_novo and not achado_exato:
                 # o usuário olhou a sugestão e disse que não é: entra na fila de
                 # cadastro como produto novo, e nenhuma nota vai para o sugerido
                 status, tag = 'CADASTRAR COMO NOVO (decidido na tela)', 'ERRO'
@@ -1790,6 +1858,12 @@ class TelaImportacaoNFe(ttk.Frame):
                 f['casou_por'].upper() if f['casou_por'] else '—', f['itens']), tags=(f['tag'],))
             self._grids['produtos'][iid] = f
 
+        # a ordenação escolhida no cabeçalho sobrevive à reanálise: quem ordenou
+        # por ITENS para atacar os produtos mais usados não quer perder isso a
+        # cada desempate
+        for t in (self.tree_cli, self.tree_nat, self.tree_prod):
+            self._aplicar_ordem(t)
+
         total = len(analise['fase4'])
         chunk = 60
         # token de geração: uma reanálise durante o render descarta a cadeia
@@ -1829,6 +1903,9 @@ class TelaImportacaoNFe(ttk.Frame):
             self._pos_render(analise)
 
     def _pos_render(self, analise):
+        # a grade de notas é montada em pedaços; a ordem só pode ser aplicada
+        # depois do último
+        self._aplicar_ordem(self.tree_nota)
         self.progresso['value'] = 100
         self.btn_analisar.config(state=tk.NORMAL)
         self.btn_cadastrar.config(state=tk.NORMAL)
@@ -2252,6 +2329,11 @@ class TelaImportacaoNFe(ttk.Frame):
                     registros.append(d)
                     f['codigo_erp'] = str(prox)
                     f['status'], f['tag'], f['casou_por'] = 'OK', 'OK', 'importacao'
+                    # o produto passou a existir: a decisão "cadastrar como novo"
+                    # cumpriu o papel e tem de sair. Ficando, a reanálise punha a
+                    # linha de volta em CADASTRAR COMO NOVO e a nota continuava
+                    # bloqueada — pedindo um cadastro que já foi feito.
+                    self._prod_novo.discard(f['cod_xml'])
                     log.append(f"✅ {f['cod_xml']} {xml_mock['x_prod'][:40]} -> produto {prox}")
                     prox += 1
                 res = FirebirdImporter(fb).import_produtos(registros)
@@ -2263,11 +2345,15 @@ class TelaImportacaoNFe(ttk.Frame):
             log.append("")
             for e in erros:
                 log.append(f"❌ {e.get('erro', e)}")
+        self._salvar_config()
         messagebox.showinfo(
             "Concluído",
             f"{inseridos} produto(s) cadastrado(s)."
             + (f"\n\n{len(erros)} erro(s) — o lote de produtos é tudo-ou-nada, "
-               f"veja o log." if erros else "\n\nReanalise para atualizar as fases."))
+               f"veja o log." if erros else
+               "\n\n⚠ Clique em “Ler XMLs e Analisar” antes de importar: a análise em "
+               "tela foi feita ANTES destes produtos existirem, e as notas que "
+               "dependem deles seguem pendentes até a releitura."))
         self._oferecer_log(log, "LOG_PRODUTOS_NFE.txt")
 
     # ------------------------------------------------------------ IMPORTAR

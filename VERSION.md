@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.19                            │
+│                      VERSÃO 4.20                            │
 │                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.19 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.20 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **“Cadastrar como novo” não saía do lugar: os produtos eram criados e as notas continuavam pendentes.** A decisão tomada na conferência fica guardada no `config.ini` para atravessar a reanálise — só que ela não era apagada quando o produto era **efetivamente cadastrado**. Resultado: cadastrava-se os 51 produtos, reanalisava, e a fase 3 voltava a marcar as mesmas linhas como `CADASTRAR COMO NOVO`, bloqueando as notas de novo — pedindo um cadastro que já tinha sido feito. Agora a decisão é apagada quando o produto nasce (e o `config.ini` gravado na hora) e, como rede de segurança, ela também **morre sozinha** quando o código passa a casar EXATO com um produto do ERP: é o que acontece depois do cadastro, porque o código do XML vai para o `PRODUTO_COD_IMPORTACAO`. Decisão velha nunca mais bloqueia um cadastro que existe |
+| Importação Notas Fiscais   | ✅ PRONTO | **Colunas ordenáveis em todas as abas: clique no cabeçalho.** Clique ordena, clique de novo inverte, e uma seta (▲/▼) mostra por onde a grade está ordenada. A ordenação entende o **tipo** do dado em vez de comparar texto: `ITENS` ordena 1, 2, 10, 100 (e não 1, 10, 100, 2), `VALOR` entende `R$ 1.234,56`, `EMISSÃO` ordena por data de verdade, e célula vazia (`—`) vai para o fim. A ordem escolhida **sobrevive à reanálise e ao desempate de produto** — quem ordenou por `ITENS` para atacar primeiro os produtos que aparecem em mais notas não perde isso a cada decisão. Na aba 4, que é montada em pedaços, a ordem é reaplicada no fim para os últimos pedaços não ficarem fora de lugar; as cores de status e a marcação das notas continuam intactas |
+
+### ✅ VERSÃO 4.19 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
