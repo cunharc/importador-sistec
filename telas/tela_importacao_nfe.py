@@ -393,11 +393,17 @@ class TelaImportacaoNFe(ttk.Frame):
             ("STATUS", "CFOP", "TIPO", "DESCRIÇÃO NO ERP", "FLUXO CAIXA",
              "CONTÁBIL", "ESTOQUE", "NOTAS"),
             (180, 70, 70, 220, 85, 75, 70, 55))
+        # as duas descrições ficam lado a lado, cada uma ao lado do seu código: é a
+        # comparação que diz se o produto casado é o mesmo item, sem ter de abrir a
+        # conferência linha por linha
+        # o "➜ GRAVA" nos dois campos do ERP diz, sem precisar abrir nada, qual
+        # produto a nota vai levar — com os dois lados na tela, saber qual é qual
+        # pela posição não é óbvio
         self.tree_prod = self._criar_aba(
             'produtos', "3. Produto",
-            ("STATUS", "CÓD. XML", "DESCRIÇÃO NO XML", "NCM", "UN",
-             "CÓD. ERP", "CASOU POR", "ITENS"),
-            (170, 100, 250, 90, 45, 80, 95, 50))
+            ("STATUS", "CÓD. XML", "DESCRIÇÃO NO XML", "➜ GRAVA CÓD. ERP",
+             "➜ GRAVA DESCRIÇÃO DO ERP", "NCM", "UN", "CASOU POR", "ITENS"),
+            (165, 95, 220, 110, 220, 85, 40, 90, 45))
         # duplo clique desempata produto AMBÍGUO (o mesmo código em dois cadastros)
         self.tree_prod.bind("<Double-1>", self._on_dblclick_produto)
         self.tree_nota = self._criar_aba(
@@ -426,8 +432,10 @@ class TelaImportacaoNFe(ttk.Frame):
             # clique no cabeçalho ordena por aquela coluna (2º clique inverte)
             tree.heading(col, text=col,
                          command=lambda t=tree, c=col: self._ordenar_aba(t, c))
-            anchor = tk.W if col in ("RAZÃO SOCIAL", "DESCRIÇÃO NO XML", "DESCRIÇÃO NO ERP",
-                                     "CONTRAPARTE", "MOTIVO", "CIDADE") else tk.CENTER
+            anchor = (tk.W if ('DESCRIÇÃO' in col
+                               or col in ("RAZÃO SOCIAL", "CONTRAPARTE", "MOTIVO",
+                                          "CIDADE"))
+                      else tk.CENTER)
             tree.column(col, width=larg, anchor=anchor)
         for tag, (bg, fg) in CORES_STATUS.items():
             tree.tag_configure(tag, background=bg, foreground=fg)
@@ -1625,7 +1633,13 @@ class TelaImportacaoNFe(ttk.Frame):
                  font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, padx=14, pady=(12, 0))
         tk.Label(top, text=f"{f['status']}   ·   {f['itens']} item(ns) nas notas   ·   "
                            f"casou por {(f['casou_por'] or '—').upper()}",
-                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14, pady=(0, 8))
+                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14, pady=(0, 4))
+        # sem isto o usuário via os dois cadastros e ainda ficava sem saber qual
+        # deles a nota vai levar
+        tk.Label(top, text=f"➜ Hoje esta nota gravaria o produto {info['codigo']} — "
+                           f"{info['descricao'][:52]}",
+                 font=("Segoe UI", 9, "bold"), fg="#14146E"
+                 ).pack(anchor=tk.W, padx=14, pady=(0, 8))
 
         if dif:
             aviso = tk.Frame(top, bg="#FDECEA", highlightbackground="#E74C3C",
@@ -1744,21 +1758,33 @@ class TelaImportacaoNFe(ttk.Frame):
         lbl_conta = tk.Label(linha, text="", font=("Segoe UI", 8), fg="#555")
         lbl_conta.pack(side=tk.LEFT)
 
-        cols = ("CÓDIGO", "DESCRIÇÃO", "NCM", "UN", "IMPORTAÇÃO", "AUXILIAR", "SIT.")
+        # A 1ª coluna diz de quem é a linha: ▶ é o produto que ESTÁ valendo hoje
+        # (o que iria para a nota) e ✔ é o que a sua seleção vai gravar. Com 58
+        # produtos na lista, saber qual é qual pela posição é impossível.
+        cols = ("", "CÓDIGO", "DESCRIÇÃO", "NCM", "UN", "IMPORTAÇÃO", "AUXILIAR", "SIT.")
         tree = ttk.Treeview(top, columns=cols, show="headings", height=14)
-        for c, w in zip(cols, (70, 300, 90, 45, 110, 110, 55)):
+        for c, w in zip(cols, (34, 70, 290, 90, 45, 105, 105, 55)):
             tree.heading(c, text=c)
             tree.column(c, width=w, anchor=tk.W if c == "DESCRIÇÃO" else tk.CENTER)
+        tree.tag_configure('atual', background="#FFF3CD")      # o que vale hoje
+        tree.tag_configure('mesmo_ncm', foreground="#1E8449")   # NCM igual ao do XML
         tree.pack(fill=tk.BOTH, expand=True, padx=14)
 
         # o NCM do XML primeiro: é o atalho que resolve a maioria dos casos
         ncm_xml = self._so_ncm(it.get('ncm'))
+        # quem está valendo agora: a escolha anterior ou a sugestão do sistema
+        atual = self._prod_escolhido.get(f['cod_xml']) or f.get('codigo_erp')
+        try:
+            atual = int(atual)
+        except (TypeError, ValueError):
+            atual = None
 
         def preencher(*_):
             termo = ent.get().strip().upper()
             for i in tree.get_children():
                 tree.delete(i)
             mostrados = 0
+            iid_atual = None
             def chave(r):
                 mesmo_ncm = self._so_ncm(r.get('produto_class_fiscal')) == ncm_xml
                 return (0 if mesmo_ncm else 1, str(r.get('produto_descricao') or ''))
@@ -1771,27 +1797,73 @@ class TelaImportacaoNFe(ttk.Frame):
                 if mostrados >= 400:
                     break
                 mostrados += 1
-                tree.insert("", tk.END, values=(
-                    r.get('produto_codigo'),
+                cod_erp = r.get('produto_codigo')
+                eh_atual = atual is not None and int(cod_erp) == atual
+                tags = []
+                if eh_atual:
+                    tags.append('atual')
+                elif ncm_xml and self._so_ncm(r.get('produto_class_fiscal')) == ncm_xml:
+                    tags.append('mesmo_ncm')
+                iid = tree.insert("", tk.END, values=(
+                    '▶' if eh_atual else '',
+                    cod_erp,
                     str(r.get('produto_descricao') or '')[:60],
                     r.get('produto_class_fiscal') or '—',
                     (r.get('produto_unidade_cv') or r.get('produto_unidade_est') or '—'),
                     r.get('produto_cod_importacao') or '—',
                     r.get('produto_cod_auxiliar') or '—',
                     'ATIVO' if str(r.get('produto_ativo') or '').upper() != 'N'
-                    else 'INATIVO'))
+                    else 'INATIVO'), tags=tuple(tags))
+                if eh_atual:
+                    iid_atual = iid
             lbl_conta.config(text=f"{mostrados} produto(s)"
                                   + (" — refine a busca" if mostrados >= 400 else "")
-                                  + ("   ·   mesmo NCM do XML no topo" if ncm_xml else ""))
+                                  + ("   ·   ▶ é o que vale hoje" if iid_atual else ""))
+            # já começa na linha que está valendo, e o rodapé diz o que vai gravar
+            if iid_atual:
+                tree.selection_set(iid_atual)
+                tree.focus(iid_atual)
+                tree.see(iid_atual)
+            mostrar_escolha()
 
+        def linha_marcada():
+            sel = tree.selection()
+            return tree.item(sel[0], 'values') if sel else None
+
+        def mostrar_escolha(*_):
+            v = linha_marcada()
+            # o ✔ acompanha a seleção: a linha marcada é a que vai para a nota
+            for i in tree.get_children():
+                vals = list(tree.item(i, 'values'))
+                marca = '▶' if 'atual' in tree.item(i, 'tags') else ''
+                if v is not None and i in tree.selection():
+                    marca = ('✔▶' if marca else '✔')
+                if vals[0] != marca:
+                    tree.set(i, '', marca)
+            if v is None:
+                lbl_grava.config(text="Selecione um produto na lista.", fg="#C0392B")
+                return
+            igual = atual is not None and int(v[1]) == atual
+            lbl_grava.config(
+                text=f"✔ Vai gravar na nota: produto {v[1]} — {v[2]}"
+                     + ("   (é o mesmo que já estava valendo)" if igual else
+                        f"   (substitui o {atual})" if atual is not None else ""),
+                fg="#1E8449" if not igual else "#555")
+
+        rodape = tk.Frame(top)
+        rodape.pack(fill=tk.X, padx=14, pady=12)
+        lbl_grava = tk.Label(top, text="", font=("Segoe UI", 9, "bold"), fg="#1E8449")
+        lbl_grava.pack(anchor=tk.W, padx=14, pady=(6, 0), before=rodape)
+
+        tree.bind("<<TreeviewSelect>>", mostrar_escolha)
         ent.bind("<KeyRelease>", preencher)
         preencher()
 
         def usar():
-            sel = tree.selection()
-            if not sel:
+            v = linha_marcada()
+            if not v:
                 return messagebox.showwarning("Aviso", "Selecione um produto da lista.")
-            codigo = int(tree.item(sel[0], 'values')[0])
+            codigo = int(v[1])
             self._prod_escolhido[f['cod_xml']] = codigo
             self._prod_confirmado[f['cod_xml']] = codigo
             self._prod_novo.discard(f['cod_xml'])
@@ -1799,8 +1871,6 @@ class TelaImportacaoNFe(ttk.Frame):
             self._salvar_config()
             self._reclassificar()
 
-        rodape = tk.Frame(top)
-        rodape.pack(fill=tk.X, padx=14, pady=12)
         ttk.Button(rodape, text="Usar este produto", command=usar).pack(side=tk.LEFT)
         tree.bind("<Double-1>", lambda _e: usar())
         ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
@@ -1853,8 +1923,9 @@ class TelaImportacaoNFe(ttk.Frame):
             it = f['item']
             iid = self.tree_prod.insert("", tk.END, values=(
                 f['status'], f['cod_xml'], (it.get('x_prod') or '')[:55],
-                it.get('ncm', ''), it.get('u_com', ''),
                 f['codigo_erp'] if f['codigo_erp'] else '—',
+                (f['desc_erp'] or '')[:55] or '—',
+                it.get('ncm', ''), it.get('u_com', ''),
                 f['casou_por'].upper() if f['casou_por'] else '—', f['itens']), tags=(f['tag'],))
             self._grids['produtos'][iid] = f
 
@@ -3475,13 +3546,17 @@ class TelaImportacaoNFe(ttk.Frame):
                                 f['fluxo'], f['contabil'], f['estoque'], f['notas']])
                 w.writerow([])
                 w.writerow(["FASE 3 - PRODUTO"])
-                w.writerow(["STATUS", "COD_XML", "DESCRICAO_XML", "NCM", "UN",
-                            "COD_ERP", "CASOU_POR", "ITENS"])
+                w.writerow(["STATUS", "COD_XML", "DESCRICAO_XML", "GRAVA_COD_ERP",
+                            "GRAVA_DESCRICAO_ERP", "NCM_XML", "NCM_ERP", "UN_XML",
+                            "UN_ERP", "CASOU_POR", "ITENS"])
                 for f in self.analise['fase3']:
                     it = f['item']
+                    erp = f.get('confere') or {}
                     w.writerow([f['status'], f['cod_xml'], it.get('x_prod', ''),
-                                it.get('ncm', ''), it.get('u_com', ''),
-                                f['codigo_erp'] or '', f['casou_por'], f['itens']])
+                                f['codigo_erp'] or '', f.get('desc_erp', ''),
+                                it.get('ncm', ''), erp.get('ncm', ''),
+                                it.get('u_com', ''), erp.get('unidade', ''),
+                                f['casou_por'], f['itens']])
                 w.writerow([])
                 w.writerow(["FASE 4 - NOTAS"])
                 w.writerow(["STATUS", "SITUACAO", "TIPO", "NUMERO", "SERIE", "EMISSAO", "CHAVE",

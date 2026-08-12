@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.20                            │
+│                      VERSÃO 4.21                            │
 │                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.20 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.21 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | **As duas descrições na grade da aba 3, e a marcação de qual produto vai para a nota.** A aba mostrava só a descrição do XML: para saber com quem o código casou era preciso abrir a conferência linha por linha. Agora cada lado vem com seu par código + descrição — `CÓD. XML` / `DESCRIÇÃO NO XML` contra **`➜ GRAVA CÓD. ERP` / `➜ GRAVA DESCRIÇÃO DO ERP`** — e o `➜ GRAVA` no cabeçalho diz sem ambiguidade qual dos dois lados é o que a nota vai levar. Dá para varrer a lista inteira de olho e ver, por exemplo, `CAPRINO VIVO` casado com `IMPRESSORA HP` sem clicar em nada. A exportação CSV acompanhou: leva as duas descrições e o **NCM e a unidade dos dois lados** (`NCM_XML` x `NCM_ERP`, `UN_XML` x `UN_ERP`), que é o que permite conferir tudo numa planilha |
+| Importação Notas Fiscais   | ✅ PRONTO | **Na lista “Escolher outro produto do ERP”, dá para ver qual está valendo e qual vai gravar.** Com 58 produtos na tela, nada dizia qual deles a nota usa hoje nem qual a seleção vai gravar. Entrou uma coluna de marcação: **▶** na linha do produto **que está valendo agora** (a sugestão do sistema ou a escolha anterior), com a linha em âmbar, e **✔** na linha selecionada — as duas juntas (`✔▶`) quando é o mesmo. A lista já **abre posicionada** na linha que vale, e o rodapé escreve a decisão em uma frase: *“✔ Vai gravar na nota: produto 900 — MP SUINO - PERNIL SEM OSSO (substitui o 58)”*, atualizando a cada seleção. Produto de **mesmo NCM do XML** continua no topo e agora aparece em verde. Na conferência (duplo clique) entrou a linha *“➜ Hoje esta nota gravaria o produto 58 — …”*, porque ver os dois cadastros lado a lado sem saber qual vale não resolve a dúvida |
+
+### ✅ VERSÃO 4.20 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
