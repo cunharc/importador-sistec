@@ -157,15 +157,50 @@ def inserir_registros(conn, registros: list, callback_progresso=None, checar_can
     total = len(registros)
     inseridos = 0
     erros = 0
-    
+
+    # O PLANO_CODIGO é a chave INTERNA da conta — é ele que CAIXA_MOVTO_ITENS,
+    # CAIXA_OPERADOR, CAIXA_TIPO_PAGTO e o vínculo de centro de custo apontam por
+    # FK. Quem o gera no ERP é o GEN_PLANO_CONTAS, pelo trigger
+    # PROXIMO_PLANO_CONTA (que só age quando o código chega NULL — e chegava
+    # preenchido daqui, então o generator ficava parado). Resultado: na base do
+    # cliente o generator estava em 0 com contas até 249, e cadastrar conta pela
+    # tela do ERP batia em código existente.
+    # A conta em si (PLANO_CONTA, o 4.2.1.04.152), o reduzido e a descrição
+    # continuam vindo da planilha: são o que o contador definiu, e o generator
+    # não tem nada a ver com eles.
+    try:
+        primeiro = proximo_do_generator(conn, 'GEN_PLANO_CONTAS',
+                                        'TABELA_PLANO', 'PLANO_CODIGO')
+    except Exception as e:
+        _log.warning(f"GEN_PLANO_CONTAS indisponível ({e}); mantendo o código calculado")
+        primeiro = None
+    usa_generator = primeiro is not None
+    pendente = primeiro          # o 1º valor já saiu na sincronização
+
+    def codigo_do_generator():
+        """Valor já sincronizado na 1ª chamada; depois só incrementa o generator.
+
+        Sincronizar a cada linha faria um MAX na tabela por conta — e é
+        desnecessário: depois do primeiro, ninguém mais está na frente.
+        """
+        nonlocal pendente
+        if pendente is not None:
+            valor, pendente = pendente, None
+            return valor
+        c = conn.cursor()
+        c.execute("SELECT GEN_ID(GEN_PLANO_CONTAS, 1) FROM RDB$DATABASE")
+        return int(c.fetchone()[0])
+
     try:
         for i, reg in enumerate(registros):
             if checar_cancelamento and checar_cancelamento():
                 conn.rollback()
                 return False, inseridos, erros
-            
+
             if reg.get('STATUS') == 'OK':
                 try:
+                    if usa_generator:
+                        reg['PLANO_CODIGO'] = codigo_do_generator()
                     cur.execute(sql, (
                         reg['PLANO_EMPRESA'], reg['PLANO_FILIAL'], reg['PLANO_EXERCICIO'],
                         reg['PLANO_CODIGO'], reg['PLANO_CONTA'], reg['PLANO_REDUZIDO'],
@@ -206,20 +241,59 @@ def buscar_vendedor_por_nome(conn, empresa, filial, nome):
     return row[0] if row else None
 
 
+def proximo_do_generator(conn, generator, tabela, coluna):
+    """Próximo valor do generator do ERP, sincronizado com o MAX real da tabela.
+
+    O ERP tira o código do generator. Criar cadastro por `MAX(coluna) + 1` sem
+    tocar nele deixa o generator parado no valor antigo, e o próximo registro
+    criado pela tela do ERP recebe um código que já existe — "violation of
+    PRIMARY or UNIQUE KEY" (-803), que é o ERP travando na cara do usuário.
+
+    O MAX é da tabela inteira, sem filtrar empresa/filial: o generator é um só
+    para todas as filiais. Generator inexistente devolve None e quem chamou volta
+    ao MAX+1 — ERP antigo não pode virar erro.
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM RDB$GENERATORS "
+                "WHERE TRIM(RDB$GENERATOR_NAME) = ?", (generator,))
+    if not int((cur.fetchone() or [0])[0] or 0):
+        return None
+    cur.execute(f"SELECT COALESCE(MAX({coluna}), 0) FROM {tabela}")
+    maximo = int((cur.fetchone() or [0])[0] or 0)
+    cur.execute(f"SELECT GEN_ID({generator}, 0) FROM RDB$DATABASE")
+    atual = int((cur.fetchone() or [0])[0] or 0)
+    if atual < maximo:
+        cur.execute(f"SELECT GEN_ID({generator}, {maximo - atual}) FROM RDB$DATABASE")
+        cur.fetchone()
+    cur.execute(f"SELECT GEN_ID({generator}, 1) FROM RDB$DATABASE")
+    return int(cur.fetchone()[0])
+
+
 def buscar_ou_criar_vendedor(conn, empresa, filial, nome):
-    """Busca vendedor pelo nome. Se não existir, cria com código sequencial."""
+    """Busca vendedor pelo nome. Se não existir, cria com código do generator."""
     codigo = buscar_vendedor_por_nome(conn, empresa, filial, nome)
     if codigo:
         return codigo
     if not nome or not str(nome).strip():
         return None
     cur = conn.cursor()
-    cur.execute(
-        "SELECT COALESCE(MAX(VEND_CODIGO), 0) + 1 FROM TABELA_VENDEDOR "
-        "WHERE VEND_EMPRESA = ? AND VEND_FILIAL = ?",
-        (empresa, filial)
-    )
-    novo_codigo = cur.fetchone()[0]
+    # o VEND_CODIGO do ERP vem do GEN_VENDEDOR (na base do cliente o generator
+    # está em 17 com 17 vendedores — casamento exato). Criar por MAX+1 aqui
+    # deixaria o generator atrás e o próximo vendedor cadastrado na tela do ERP
+    # repetiria código.
+    try:
+        novo_codigo = proximo_do_generator(conn, 'GEN_VENDEDOR',
+                                           'TABELA_VENDEDOR', 'VEND_CODIGO')
+    except Exception as e:
+        _log.warning(f"GEN_VENDEDOR indisponível ({e}); usando MAX+1")
+        novo_codigo = None
+    if not novo_codigo:
+        cur.execute(
+            "SELECT COALESCE(MAX(VEND_CODIGO), 0) + 1 FROM TABELA_VENDEDOR "
+            "WHERE VEND_EMPRESA = ? AND VEND_FILIAL = ?",
+            (empresa, filial)
+        )
+        novo_codigo = cur.fetchone()[0]
     cur.execute("""
         INSERT INTO TABELA_VENDEDOR (
             VEND_EMPRESA, VEND_FILIAL, VEND_CODIGO, VEND_NOME, VEND_ATIVO

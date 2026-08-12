@@ -581,6 +581,12 @@ class TelaImportacaoPlanilhaEstoqueProducao(ttk.Frame):
                 'ativo': str(r['produto_ativo'] or '').strip().upper(),
                 'cod_importacao': str(r.get('produto_cod_importacao') or '').strip(),
                 'cod_auxiliar': str(r.get('produto_cod_auxiliar') or '').strip(),
+                # opcionais: só quem seleciona estas colunas (a importação de notas)
+                # os traz. Servem para conferir o produto contra o XML.
+                'ncm': str(r.get('produto_class_fiscal') or '').strip(),
+                'unidade': str(r.get('produto_unidade_cv')
+                               or r.get('produto_unidade_est') or '').strip(),
+                'cbarra': str(r.get('produto_cbarra') or '').strip(),
             }
             for campo, bruto in (('codigo', codigo),
                                  ('importacao', info['cod_importacao']),

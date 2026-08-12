@@ -27,6 +27,7 @@ import threading
 import datetime
 import csv
 import os
+import re
 import sys
 
 from utils import tema
@@ -132,10 +133,20 @@ class TelaImportacaoNFe(ttk.Frame):
         self.notas = []              # todas as notas lidas
         self.analise = None          # resultado da análise (dict)
         self._grids = {}             # aba -> {item_id: dado}
-        # código do XML -> código do produto no ERP, escolhido à mão na aba 3
-        # quando o mesmo código está em dois produtos ativos (ver
-        # _escolher_produto_ambiguo). Guardado no config.ini, por banco.
+        # As três decisões que o usuário toma sobre produto na aba 3, todas
+        # guardadas no config.ini por banco (reanalisar não obriga a decidir de
+        # novo). Código do XML -> ...
+        #   _prod_escolhido: código do produto no ERP escolhido à mão. Serve para
+        #     desempatar código em dois produtos ativos (_escolher_produto_ambiguo)
+        #     e para trocar o produto que o sistema sugeriu (_conferir_produto).
+        #   _prod_confirmado: código do ERP que o usuário CONFERIU e aprovou. Só
+        #     ele tira o aviso de acerto duvidoso; confirmação de código diferente
+        #     do sugerido hoje é ignorada (o cadastro mudou desde então).
+        #   _prod_novo: códigos que o usuário decidiu cadastrar como produto NOVO,
+        #     em vez de aceitar a sugestão do sistema.
         self._prod_escolhido = {}
+        self._prod_confirmado = {}
+        self._prod_novo = set()
 
         self.config = configparser.ConfigParser()
         self.config.read('config.ini', encoding='utf-8')
@@ -400,9 +411,10 @@ class TelaImportacaoNFe(ttk.Frame):
         self.tree_nota.bind("<Button-3>", self._menu_nota)
 
         tk.Label(content, text="Dica: resolva as abas 1, 2 e 3 (botão “Cadastrar Pendências da Aba”) "
-                               "antes de importar. Na aba 3, duplo clique numa linha AMBÍGUA escolhe "
-                               "qual produto do ERP usar. Na aba 4, clique na coluna SEL para "
-                               "marcar/desmarcar e no botão direito para copiar a chave da NF-e.",
+                               "antes de importar. Na aba 3, DUPLO CLIQUE na linha abre o produto do "
+                               "XML e o do ERP lado a lado para conferir (e desempata código AMBÍGUO). "
+                               "Na aba 4, clique na coluna SEL para marcar/desmarcar e no botão direito "
+                               "para copiar a chave da NF-e.",
                  font=("Segoe UI", 8), bg=tema.BG_BASE, fg="#555").pack(anchor=tk.W, padx=5)
 
     def _criar_aba(self, chave, titulo, colunas, larguras):
@@ -519,6 +531,11 @@ class TelaImportacaoNFe(ttk.Frame):
                 self.cmb_vend.set(self.config.get(s, 'vendedor_padrao', fallback=''))
                 self._prod_escolhido = self._ler_prod_escolhido(
                     self.config.get(s, 'produtos_ambiguos', fallback=''))
+                self._prod_confirmado = self._ler_prod_escolhido(
+                    self.config.get(s, 'produtos_conferidos', fallback=''))
+                self._prod_novo = {c.strip() for c in
+                                   self.config.get(s, 'produtos_cadastrar_novo',
+                                                   fallback='').split(';') if c.strip()}
                 self._carregar_rateio_do_escopo()
         if not mesmo_banco:
             # banco novo: a filial vem do próprio cadastro dele
@@ -552,6 +569,11 @@ class TelaImportacaoNFe(ttk.Frame):
         self.config.set(s, 'produtos_ambiguos',
                         '; '.join(f"{cod}={erp}" for cod, erp
                                   in sorted(self._prod_escolhido.items())))
+        self.config.set(s, 'produtos_conferidos',
+                        '; '.join(f"{cod}={erp}" for cod, erp
+                                  in sorted(self._prod_confirmado.items())))
+        self.config.set(s, 'produtos_cadastrar_novo',
+                        '; '.join(sorted(self._prod_novo)))
         self.config.set(s, 'escopo', self.cmb_escopo.get())
         self.config.set(s, 'tipo_cadastro_cf', self.cmb_tipo_cf.get())
         self._salvar_rateio_do_escopo()
@@ -979,12 +1001,21 @@ class TelaImportacaoNFe(ttk.Frame):
                         nats[cod] = r
                 d[rot] = nats
 
+            # NCM, unidade e código de barras entram para a CONFERÊNCIA do produto
+            # (duplo clique na aba 3) e para o confronto automático: acerto que veio
+            # da forma degradada do código só é aceito se o NCM e a unidade fecharem
+            # com o XML — foi assim que 'CAP0005' (CAPRINO VIVO) casou com o produto
+            # 5, uma IMPRESSORA HP, e ia entrar calado na nota.
             prods = fb.query(
                 "SELECT PRODUTO_CODIGO, PRODUTO_DESCRICAO, PRODUTO_ATIVO, "
-                "       PRODUTO_COD_IMPORTACAO, PRODUTO_COD_AUXILIAR "
+                "       PRODUTO_COD_IMPORTACAO, PRODUTO_COD_AUXILIAR, "
+                "       PRODUTO_CLASS_FISCAL, PRODUTO_UNIDADE_CV, "
+                "       PRODUTO_UNIDADE_EST, PRODUTO_CBARRA "
                 "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?",
                 [emp_cad, fil_cad])
             d['indices_produto'] = self._indexar_produtos(prods)
+            # lista completa, para a busca "escolher outro produto do ERP"
+            d['produtos'] = prods
 
             chaves = set()
             for tab, col in (('TABELA_NF_SAIDA', 'NFS_CHAVE_DANFE'),
@@ -1162,6 +1193,28 @@ class TelaImportacaoNFe(ttk.Frame):
             # escolha, sem ter de varrer o índice de novo
             cands = self._infos_produto(dados, ambiguos) if ambiguos else []
             escolhido = self._prod_escolhido.get(cod)
+            # Escolha à mão fora do desempate: trocar o produto que o sistema
+            # sugeriu (duplo clique -> "escolher outro produto do ERP"). Vale
+            # enquanto o produto existir no ERP — escolha velha não pode virar
+            # NFP_PRODUTO inexistente.
+            if not ambiguos and escolhido:
+                trocado = self._info_por_codigo(dados, escolhido)
+                if trocado:
+                    info = dict(trocado)
+                    info['trocado_na_tela'] = True
+                    campo = 'escolha na tela'
+            if cod in self._prod_novo:
+                # o usuário olhou a sugestão e disse que não é: entra na fila de
+                # cadastro como produto novo, e nenhuma nota vai para o sugerido
+                status, tag = 'CADASTRAR COMO NOVO (decidido na tela)', 'ERRO'
+                info, ambiguos, cands = None, None, []
+                fase3.append({
+                    'cod_xml': cod, 'item': reg['item'], 'itens': reg['qtde'],
+                    'codigo_erp': None, 'desc_erp': '', 'casou_por': '',
+                    'status': status, 'tag': tag, 'ambiguos': [],
+                    'confere': None,
+                })
+                continue
             if ambiguos and escolhido in ambiguos:
                 # o usuário já desempatou na tela (duplo clique na aba 3). Sem essa
                 # saída, um código ambíguo travava toda nota que o cita, e nem
@@ -1177,13 +1230,30 @@ class TelaImportacaoNFe(ttk.Frame):
                 tag = 'ERRO'
             elif info is None:
                 status, tag = 'NÃO ENCONTRADO', 'ERRO'
+            elif self._prod_confirmado.get(cod) == (info['codigo'] if info else None):
+                # conferido na tela, campo a campo, e aprovado pelo usuário
+                status = f"OK (conferido na tela: {info['codigo']})"
+                tag = 'OK'
+            elif info.get('trocado_na_tela'):
+                status = f"OK (produto trocado na tela: {info['codigo']})"
+                tag = 'OK'
             elif info.get('casou_degradado'):
-                # achou pelos dígitos, ignorando as letras do código do XML. Não
-                # bloqueia (é o que o resolvedor tem), mas nunca passa calado:
-                # letra diferente costuma ser produto diferente.
-                status = (f"OK (casou só pelos dígitos {info['casou_degradado']} — "
-                          f"confira se é o produto certo)")
-                tag = 'AVISO'
+                # achou pelos dígitos, ignorando as letras do código do XML. Antes
+                # isso era só um aviso e a nota entrava: foi assim que 'CAP0005'
+                # (CAPRINO VIVO) casou com o produto 5, uma IMPRESSORA HP. Agora o
+                # NCM e a unidade do XML são confrontados com os do cadastro — se
+                # divergirem, BLOQUEIA e pede conferência, porque acerto pelos
+                # dígitos com NCM de outra família não é acerto, é acidente.
+                dif = self._divergencias_produto(reg['item'], info)
+                if dif:
+                    status = (f"CONFERIR (casou só pelos dígitos "
+                              f"{info['casou_degradado']}; "
+                              + '; '.join(dif) + ") — duplo clique")
+                    tag = 'ERRO'
+                else:
+                    status = (f"OK (casou só pelos dígitos {info['casou_degradado']} "
+                              f"— NCM e unidade batem; duplo clique confere)")
+                    tag = 'AVISO'
             elif info.get('gemeos_inativos'):
                 status = ('OK (gêmeo inativo ignorado: '
                           + ', '.join(map(str, info['gemeos_inativos'])) + ')')
@@ -1201,6 +1271,9 @@ class TelaImportacaoNFe(ttk.Frame):
                 'desc_erp': info['descricao'] if info else '',
                 'casou_por': campo or '', 'status': status, 'tag': tag,
                 'ambiguos': cands,
+                # o produto do ERP inteiro fica na linha: é o que a conferência
+                # (duplo clique) põe lado a lado com o XML
+                'confere': info,
             })
 
         # ---- fase 4: notas
@@ -1211,6 +1284,13 @@ class TelaImportacaoNFe(ttk.Frame):
         # ambiguidade e produto faltando bloqueiam pelo mesmo caminho, mas a saída
         # é diferente (escolher x cadastrar) — o motivo da nota diz qual é qual
         amb_prod = {f['cod_xml'] for f in fase3 if f['tag'] == 'ERRO' and f['ambiguos']}
+        # acerto duvidoso que o confronto de NCM/unidade reprovou: a saída é
+        # conferir na tela, não cadastrar — dizer "não encontrado" mandaria o
+        # usuário criar um produto duplicado do que talvez já exista
+        conf_prod = {f['cod_xml'] for f in fase3
+                     if f['tag'] == 'ERRO' and f.get('confere')}
+        novo_prod = {f['cod_xml'] for f in fase3
+                     if f['tag'] == 'ERRO' and f['cod_xml'] in self._prod_novo}
         fase4 = []
         for n in sorted(notas, key=lambda x: (x['tp_nf'], x['nro_nf'])):
             tipo = 'SAÍDA' if n['tp_nf'] == 1 else 'ENTRADA'
@@ -1258,7 +1338,19 @@ class TelaImportacaoNFe(ttk.Frame):
                     motivos.append('fase 3: produto ambíguo — duplo clique na aba 3 para '
                                    'escolher qual usar (' + ', '.join(ambig[:4])
                                    + (', ...' if len(ambig) > 4 else '') + ')')
-                if any(c not in amb_prod for c in cods_pend):
+                conf = [c for c in cods_pend if c in conf_prod and c not in amb_prod]
+                if conf:
+                    motivos.append('fase 3: produto casou por palpite e o NCM/unidade '
+                                   'não fecham — duplo clique na aba 3 para conferir ('
+                                   + ', '.join(conf[:4])
+                                   + (', ...' if len(conf) > 4 else '') + ')')
+                novos = [c for c in cods_pend if c in novo_prod]
+                if novos:
+                    motivos.append('fase 3: produto a cadastrar como novo (decidido na '
+                                   'tela): ' + ', '.join(novos[:4])
+                                   + (', ...' if len(novos) > 4 else ''))
+                if any(c not in amb_prod and c not in conf_prod and c not in novo_prod
+                       for c in cods_pend):
                     motivos.append('fase 3: produto não encontrado')
                 if motivos:
                     status, tag = 'PENDENTE FASES 1-3', 'ERRO'
@@ -1313,21 +1405,72 @@ class TelaImportacaoNFe(ttk.Frame):
                         achados.setdefault(info['codigo'], info)
         return [achados[c] for c in sorted(alvo) if c in achados]
 
+    # -------------------------------------------- CONFERÊNCIA XML × ERP
+    def _info_por_codigo(self, dados, codigo):
+        """O produto do ERP com este código, do índice já carregado."""
+        try:
+            alvo = int(codigo)
+        except (TypeError, ValueError):
+            return None
+        for info in (self._infos_produto(dados, [alvo]) or []):
+            return info
+        return None
+
+    @staticmethod
+    def _so_ncm(valor):
+        """NCM comparável: '0204.50.00' e '02045000' são o mesmo NCM."""
+        return re.sub(r'\D', '', str(valor or ''))
+
+    @classmethod
+    def _divergencias_produto(cls, item, info):
+        """O que NÃO bate entre o item do XML e o produto do ERP.
+
+        Só compara o que existe nos dois lados — cadastro sem NCM não vira
+        divergência, senão o aviso viraria ruído e ninguém olharia mais.
+        A comparação é por NCM e unidade, os dois campos objetivos: descrição
+        varia legitimamente ('MP DUROC' x 'RECORTE DUROC') e não serve de prova.
+        """
+        dif = []
+        ncm_xml, ncm_erp = cls._so_ncm(item.get('ncm')), cls._so_ncm(info.get('ncm'))
+        if ncm_xml and ncm_erp and ncm_xml != ncm_erp:
+            # NCM de família diferente (os 4 primeiros dígitos) é caso grave: é o
+            # que separa CARNE (0204) de IMPRESSORA (8443)
+            grave = ncm_xml[:4] != ncm_erp[:4]
+            dif.append(f"NCM {'DIFERENTE' if grave else 'difere'}: "
+                       f"XML {item.get('ncm')} x ERP {info.get('ncm')}")
+        un_xml = str(item.get('u_com') or '').strip().upper()
+        un_erp = str(info.get('unidade') or '').strip().upper()
+        if un_xml and un_erp and un_xml != un_erp:
+            dif.append(f"unidade: XML {un_xml} x ERP {un_erp}")
+        return dif
+
     # ------------------------------------------- PRODUTO AMBÍGUO (desempate)
     def _on_dblclick_produto(self, _evento=None):
         sel = self.tree_prod.selection()
         f = self._grids['produtos'].get(sel[0]) if sel else None
         if not f:
             return
-        if not f.get('ambiguos'):
-            if f['tag'] == 'ERRO':      # NÃO ENCONTRADO: aqui não há o que escolher
-                messagebox.showinfo(
-                    "Nada a escolher", f"O código {f['cod_xml']} não existe no ERP "
-                                       f"({f['status']}).\n\nUse “Cadastrar Pendências da "
-                                       f"Aba”. O duplo clique só desempata código que está "
-                                       f"em mais de um produto.")
+        if f.get('ambiguos'):
+            return self._escolher_produto_ambiguo(f)
+        if f['cod_xml'] in self._prod_novo:
+            # já decidido cadastrar como novo: o duplo clique agora serve para voltar
+            if messagebox.askyesno(
+                    "Cadastrar como novo",
+                    f"O código {f['cod_xml']} está marcado para ser CADASTRADO COMO "
+                    f"PRODUTO NOVO.\n\nDesfazer essa decisão e voltar a procurar o "
+                    f"produto no ERP?"):
+                self._prod_novo.discard(f['cod_xml'])
+                self._salvar_config()
+                self._reclassificar()
             return
-        self._escolher_produto_ambiguo(f)
+        if not f.get('confere'):
+            # nada casou: não há o que conferir, só cadastrar
+            messagebox.showinfo(
+                "Nada a conferir", f"O código {f['cod_xml']} não casou com nenhum "
+                                   f"produto do ERP ({f['status']}).\n\nUse “Cadastrar "
+                                   f"Pendências da Aba” para criá-lo.")
+            return
+        self._conferir_produto(f)
 
     def _escolher_produto_ambiguo(self, f):
         """Deixa o usuário dizer qual dos produtos em conflito a nota usa.
@@ -1387,6 +1530,211 @@ class TelaImportacaoNFe(ttk.Frame):
         if f['cod_xml'] in self._prod_escolhido:
             ttk.Button(rodape, text="Desfazer a escolha",
                        command=lambda: aplicar(None)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
+        top.grab_set()
+
+    def _conferir_produto(self, f):
+        """XML × ERP lado a lado, para o usuário decidir se é o mesmo produto.
+
+        O sistema acerta o produto pelo código, e quando o acerto vem da forma
+        degradada ('CAP0005' -> '5') o palpite pode ser absurdo: na base do
+        cliente o CAPRINO VIVO da nota casou com o produto 5, uma IMPRESSORA HP.
+        Vincular errado é pior que não vincular — a nota entra com o item errado,
+        o estoque e o custo vão para o produto errado e ninguém percebe depois.
+        Daí esta tela: os dois cadastros um ao lado do outro, campo a campo, com
+        as diferenças marcadas, e três saídas — confirmar, trocar por outro
+        produto do ERP, ou mandar cadastrar como produto novo.
+        """
+        info = f['confere']
+        it = f['item']
+        dif = self._divergencias_produto(it, info)
+        top = tk.Toplevel(self)
+        top.title("Conferir o produto: XML × ERP")
+        top.transient(self.winfo_toplevel())
+
+        tk.Label(top, text=f"Código {f['cod_xml']} do XML → produto "
+                           f"{info['codigo']} do ERP",
+                 font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, padx=14, pady=(12, 0))
+        tk.Label(top, text=f"{f['status']}   ·   {f['itens']} item(ns) nas notas   ·   "
+                           f"casou por {(f['casou_por'] or '—').upper()}",
+                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14, pady=(0, 8))
+
+        if dif:
+            aviso = tk.Frame(top, bg="#FDECEA", highlightbackground="#E74C3C",
+                             highlightthickness=1)
+            aviso.pack(fill=tk.X, padx=14, pady=(0, 8))
+            tk.Label(aviso, bg="#FDECEA", fg="#922B21", justify=tk.LEFT,
+                     font=("Segoe UI", 9, "bold"),
+                     text="⚠ Os dois cadastros NÃO batem:\n   • "
+                          + "\n   • ".join(dif)).pack(anchor=tk.W, padx=10, pady=6)
+        else:
+            tk.Label(top, fg="#1E8449", font=("Segoe UI", 9, "bold"),
+                     text="✔ NCM e unidade batem nos dois lados."
+                     ).pack(anchor=tk.W, padx=14, pady=(0, 8))
+
+        # ---- as duas colunas
+        grade = tk.Frame(top)
+        grade.pack(fill=tk.BOTH, expand=True, padx=14)
+        cabec = (("", 16), ("NO XML DA NOTA", 44), ("NO CADASTRO DO ERP", 44))
+        for c, (txt, larg) in enumerate(cabec):
+            tk.Label(grade, text=txt, font=("Segoe UI", 9, "bold"), width=larg,
+                     anchor=tk.W, bg="#EEF2F7").grid(row=0, column=c, sticky="we",
+                                                     padx=1, pady=1)
+
+        ncm_dif = (self._so_ncm(it.get('ncm')) and self._so_ncm(info.get('ncm'))
+                   and self._so_ncm(it.get('ncm')) != self._so_ncm(info.get('ncm')))
+        un_xml = str(it.get('u_com') or '').strip().upper()
+        un_erp = str(info.get('unidade') or '').strip().upper()
+        un_dif = bool(un_xml and un_erp and un_xml != un_erp)
+        sit = 'ATIVO' if info.get('ativo') != 'N' else 'INATIVO'
+        linhas = [
+            ("Código", f['cod_xml'], str(info['codigo']), False),
+            ("Descrição", (it.get('x_prod') or '—')[:44], info['descricao'][:44], False),
+            ("NCM", it.get('ncm') or '—', info.get('ncm') or '(sem NCM)', ncm_dif),
+            ("Unidade", un_xml or '—', un_erp or '(sem unidade)', un_dif),
+            ("Cód. de barras", it.get('c_ean') or '—', info.get('cbarra') or '—', False),
+            ("Cód. importação", '—', info.get('cod_importacao') or '—', False),
+            ("Cód. auxiliar", '—', info.get('cod_auxiliar') or '—', False),
+            ("Situação", '—', sit, False),
+        ]
+        for r, (rot, esq, dirr, marca) in enumerate(linhas, start=1):
+            fg = "#C0392B" if marca else "#111"
+            peso = "bold" if marca else "normal"
+            tk.Label(grade, text=rot, font=("Segoe UI", 9, "bold"), anchor=tk.W,
+                     fg="#555").grid(row=r, column=0, sticky="we", padx=1, pady=1)
+            tk.Label(grade, text=str(esq), font=("Segoe UI", 9, peso), anchor=tk.W,
+                     fg=fg, bg="#FFFFFF").grid(row=r, column=1, sticky="we",
+                                               padx=1, pady=1)
+            tk.Label(grade, text=str(dirr), font=("Segoe UI", 9, peso), anchor=tk.W,
+                     fg=fg, bg="#FFFFFF").grid(row=r, column=2, sticky="we",
+                                               padx=1, pady=1)
+
+        tk.Label(top, font=("Segoe UI", 8), fg="#555", justify=tk.LEFT,
+                 text="A decisão vale para TODAS as notas com este código do XML e fica "
+                      "guardada para as próximas análises.\nDescrição diferente não é "
+                      "problema por si — o que precisa fechar é o produto ser o mesmo."
+                 ).pack(anchor=tk.W, padx=14, pady=(10, 0))
+
+        def decidir(acao):
+            cod = f['cod_xml']
+            if acao == 'confirmar':
+                self._prod_confirmado[cod] = int(info['codigo'])
+                self._prod_novo.discard(cod)
+            elif acao == 'novo':
+                self._prod_novo.add(cod)
+                self._prod_confirmado.pop(cod, None)
+                self._prod_escolhido.pop(cod, None)
+            elif acao == 'desfazer':
+                self._prod_confirmado.pop(cod, None)
+                self._prod_escolhido.pop(cod, None)
+                self._prod_novo.discard(cod)
+            top.destroy()
+            self._salvar_config()
+            self._reclassificar()
+
+        rodape = tk.Frame(top)
+        rodape.pack(fill=tk.X, padx=14, pady=12)
+        ttk.Button(rodape, text="✔ Confirmar: é este produto",
+                   command=lambda: decidir('confirmar')).pack(side=tk.LEFT)
+        ttk.Button(rodape, text="🔎 Escolher outro produto do ERP…",
+                   command=lambda: (top.destroy(), self._buscar_produto_erp(f))
+                   ).pack(side=tk.LEFT, padx=6)
+        ttk.Button(rodape, text="✚ Cadastrar como produto NOVO",
+                   command=lambda: decidir('novo')).pack(side=tk.LEFT, padx=6)
+        if (f['cod_xml'] in self._prod_confirmado
+                or f['cod_xml'] in self._prod_escolhido):
+            ttk.Button(rodape, text="Desfazer",
+                       command=lambda: decidir('desfazer')).pack(side=tk.LEFT, padx=6)
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
+        top.grab_set()
+
+    def _buscar_produto_erp(self, f):
+        """Procura o produto certo no ERP, por código ou descrição.
+
+        Existe porque a sugestão do sistema pode estar errada e o produto certo
+        pode ter código completamente diferente (o cliente cadastrou com outro
+        padrão). Sem isto, a única saída para uma sugestão errada era criar um
+        produto duplicado.
+        """
+        prods = (self.analise or {}).get('dados', {}).get('produtos') or []
+        it = f['item']
+        top = tk.Toplevel(self)
+        top.title(f"Escolher o produto do ERP para {f['cod_xml']}")
+        top.transient(self.winfo_toplevel())
+
+        tk.Label(top, text=f"XML: {f['cod_xml']} — {(it.get('x_prod') or '')[:56]}",
+                 font=("Segoe UI", 10, "bold")).pack(anchor=tk.W, padx=14, pady=(12, 0))
+        tk.Label(top, text=f"NCM {it.get('ncm') or '—'} · unidade "
+                           f"{(it.get('u_com') or '—').upper()}",
+                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14)
+
+        linha = tk.Frame(top)
+        linha.pack(fill=tk.X, padx=14, pady=(10, 4))
+        tk.Label(linha, text="Procurar:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        ent = ttk.Entry(linha, width=42, font=("Segoe UI", 9))
+        ent.pack(side=tk.LEFT, padx=6)
+        lbl_conta = tk.Label(linha, text="", font=("Segoe UI", 8), fg="#555")
+        lbl_conta.pack(side=tk.LEFT)
+
+        cols = ("CÓDIGO", "DESCRIÇÃO", "NCM", "UN", "IMPORTAÇÃO", "AUXILIAR", "SIT.")
+        tree = ttk.Treeview(top, columns=cols, show="headings", height=14)
+        for c, w in zip(cols, (70, 300, 90, 45, 110, 110, 55)):
+            tree.heading(c, text=c)
+            tree.column(c, width=w, anchor=tk.W if c == "DESCRIÇÃO" else tk.CENTER)
+        tree.pack(fill=tk.BOTH, expand=True, padx=14)
+
+        # o NCM do XML primeiro: é o atalho que resolve a maioria dos casos
+        ncm_xml = self._so_ncm(it.get('ncm'))
+
+        def preencher(*_):
+            termo = ent.get().strip().upper()
+            for i in tree.get_children():
+                tree.delete(i)
+            mostrados = 0
+            def chave(r):
+                mesmo_ncm = self._so_ncm(r.get('produto_class_fiscal')) == ncm_xml
+                return (0 if mesmo_ncm else 1, str(r.get('produto_descricao') or ''))
+            for r in sorted(prods, key=chave):
+                alvo = " ".join(str(r.get(k) or '') for k in (
+                    'produto_codigo', 'produto_descricao', 'produto_cod_importacao',
+                    'produto_cod_auxiliar', 'produto_class_fiscal')).upper()
+                if termo and termo not in alvo:
+                    continue
+                if mostrados >= 400:
+                    break
+                mostrados += 1
+                tree.insert("", tk.END, values=(
+                    r.get('produto_codigo'),
+                    str(r.get('produto_descricao') or '')[:60],
+                    r.get('produto_class_fiscal') or '—',
+                    (r.get('produto_unidade_cv') or r.get('produto_unidade_est') or '—'),
+                    r.get('produto_cod_importacao') or '—',
+                    r.get('produto_cod_auxiliar') or '—',
+                    'ATIVO' if str(r.get('produto_ativo') or '').upper() != 'N'
+                    else 'INATIVO'))
+            lbl_conta.config(text=f"{mostrados} produto(s)"
+                                  + (" — refine a busca" if mostrados >= 400 else "")
+                                  + ("   ·   mesmo NCM do XML no topo" if ncm_xml else ""))
+
+        ent.bind("<KeyRelease>", preencher)
+        preencher()
+
+        def usar():
+            sel = tree.selection()
+            if not sel:
+                return messagebox.showwarning("Aviso", "Selecione um produto da lista.")
+            codigo = int(tree.item(sel[0], 'values')[0])
+            self._prod_escolhido[f['cod_xml']] = codigo
+            self._prod_confirmado[f['cod_xml']] = codigo
+            self._prod_novo.discard(f['cod_xml'])
+            top.destroy()
+            self._salvar_config()
+            self._reclassificar()
+
+        rodape = tk.Frame(top)
+        rodape.pack(fill=tk.X, padx=14, pady=12)
+        ttk.Button(rodape, text="Usar este produto", command=usar).pack(side=tk.LEFT)
+        tree.bind("<Double-1>", lambda _e: usar())
         ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
         top.grab_set()
 
@@ -1843,15 +2191,27 @@ class TelaImportacaoNFe(ttk.Frame):
         self._oferecer_log(log, "LOG_NATUREZAS_NFE.txt")
 
     def _cadastrar_produtos(self):
-        pend = [f for f in self.analise['fase3'] if f['status'] == 'NÃO ENCONTRADO']
+        # entra o que não existe no ERP e o que o usuário DECIDIU cadastrar como
+        # novo na conferência. Linha em CONFERIR fica fora de propósito: ela tem um
+        # produto candidato, e criar outro sem olhar é exatamente a duplicata que a
+        # conferência existe para evitar.
+        pend = [f for f in self.analise['fase3']
+                if f['status'] == 'NÃO ENCONTRADO'
+                or f['cod_xml'] in self._prod_novo]
         if not pend:
-            ambig = sum(1 for f in self.analise['fase3'] if f['tag'] == 'ERRO' and f['ambiguos'])
+            fase3 = self.analise['fase3']
+            ambig = sum(1 for f in fase3 if f['tag'] == 'ERRO' and f['ambiguos'])
+            conferir = sum(1 for f in fase3 if f['tag'] == 'ERRO' and f.get('confere'))
             return messagebox.showinfo(
                 "Aviso", "Nenhum produto faltando."
                 + (f"\n\n{ambig} código(s) AMBÍGUO(s) — o mesmo código está em mais de um "
                    f"produto do ERP. Dê DUPLO CLIQUE na linha para escolher qual deles a "
                    f"nota usa; cadastrar outro produto só criaria uma terceira via do "
-                   f"mesmo item." if ambig else ""))
+                   f"mesmo item." if ambig else "")
+                + (f"\n\n{conferir} código(s) em CONFERIR — casaram por palpite e o "
+                   f"NCM/unidade não fecham. DUPLO CLIQUE na linha para ver o XML e o "
+                   f"cadastro do ERP lado a lado: lá dá para confirmar, trocar o produto "
+                   f"ou mandar cadastrar como novo." if conferir else ""))
         if not messagebox.askyesno(
                 "Confirmar",
                 f"Cadastrar {len(pend)} produto(s)?\n\n"
@@ -2306,8 +2666,13 @@ class TelaImportacaoNFe(ttk.Frame):
         # código). Mas só vale entre os que ainda estão em conflito: escolha velha
         # (produto apagado, banco trocado) não pode virar um NFP_PRODUTO que não
         # existe. Fora daí a linha volta a AMBÍGUO na fase 3 e nada é gravado.
-        escolhido = self._prod_escolhido.get(str(c_prod or '').strip())
+        cod = str(c_prod or '').strip()
+        escolhido = self._prod_escolhido.get(cod)
         if escolhido and ambiguos and escolhido in ambiguos:
+            return int(escolhido)
+        # troca feita na conferência (duplo clique -> outro produto do ERP): vale
+        # fora do desempate também, mas só se o produto ainda existir no ERP.
+        if escolhido and not ambiguos and self._info_por_codigo(dados, escolhido):
             return int(escolhido)
         return int(info['codigo']) if info else None
 

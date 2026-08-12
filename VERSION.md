@@ -3,14 +3,23 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.18                            │
-│                   Data: 11/08/2026                          │
+│                      VERSÃO 4.19                            │
+│                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.18 - RELEASE ATUAL (11/08/2026)
+### ✅ VERSÃO 4.19 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **Produto casado "pelos dígitos" entrava calado — e um deles era uma IMPRESSORA no lugar de CAPRINO VIVO.** Quando o código do XML não existe no ERP, a busca ainda tenta a forma degradada *"só os dígitos"* (`CAP0005` → `5`). Na base do cliente isso casou o **CAPRINO VIVO** da nota com o **produto 5 = IMPRESSORA HP LASERJET PRO 220V** — e era só um AVISO, ou seja, a nota importaria com o item errado, jogando quantidade, custo e estoque no produto errado sem ninguém perceber. Agora o acerto degradado é **confrontado com o cadastro**: NCM e unidade do XML contra o `PRODUTO_CLASS_FISCAL` e a unidade do ERP. Divergiu, a linha vira **CONFERIR** e **bloqueia a nota** (`NCM DIFERENTE: XML 01042000 x ERP 8443.31.99; unidade: XML KG x ERP UN`); bateu nos dois, segue como aviso dizendo que bateu. A descrição **não** entra no confronto — ela varia legitimamente (*MP DUROC* x *RECORTE DUROC*) e não serve de prova. Cadastro sem NCM não vira divergência, senão o aviso viraria ruído |
+| Importação Notas Fiscais   | ✅ PRONTO | **Duplo clique na aba 3 abre o produto do XML e o do ERP lado a lado.** Vincular ao produto errado é pior que não vincular, e para decidir é preciso **ver os dois**: a janela mostra código, descrição, NCM, unidade, código de barras, código de importação, auxiliar e situação, campo a campo, com as diferenças em vermelho e um resumo do que não bate. Dali saem três decisões: **✔ Confirmar** (é este produto — a linha vira `OK (conferido na tela)` e para de avisar), **🔎 Escolher outro produto do ERP** (busca por código, descrição, importação ou auxiliar, com os produtos de **mesmo NCM do XML no topo** — é o atalho que resolve a maioria) e **✚ Cadastrar como produto NOVO** (a linha entra na fila do botão “Cadastrar Pendências da Aba”, em vez de aceitar a sugestão). Toda decisão vale para **todas** as notas com aquele código, fica guardada no `config.ini` por banco e pode ser desfeita; decisão que envelheceu (produto apagado, banco trocado) volta a pedir conferência em vez de gravar código inexistente. Cadastrar pendências **não** cria produto para linha em CONFERIR — criar sem olhar é a duplicata que a conferência existe para evitar |
+| Importação Clientes (planilha) | ✅ PRONTO | 🐞 **Vendedor criado pela importação não saía do generator do ERP.** O `VEND_CODIGO` vem do **`GEN_VENDEDOR`** (na base do cliente o generator está em 17 com exatamente 17 vendedores — casamento exato), e a criação por nome usava `MAX(VEND_CODIGO) + 1`, deixando o generator atrás. O próximo vendedor cadastrado na tela do ERP receberia código repetido e a tela travaria com *violation of PRIMARY or UNIQUE KEY*. Mesmo remédio da numeração da nota: o código sai do generator, que antes é empurrado para frente do MAX real; sem generator no banco, volta ao `MAX+1` de antes |
+| Plano de Contas            | ✅ PRONTO | 🐞 **O código da conta não saía do generator, e cadastrar conta nova pela tela do ERP travava.** O `PLANO_CODIGO` **não** é a conta contábil: é a chave interna que `CAIXA_MOVTO_ITENS`, `CAIXA_OPERADOR`, `CAIXA_TIPO_PAGTO` e o vínculo de centro de custo apontam por FK. Quem o gera no ERP é o **`GEN_PLANO_CONTAS`**, pelo trigger `PROXIMO_PLANO_CONTA` — que só age quando o código chega **NULL**, e chegava preenchido da importação. Resultado na base do cliente: generator em **0** com contas até **249**, e a próxima conta criada na tela do ERP batendo em código existente. Agora o código sai do generator (sincronizado antes do lote, uma única consulta de MAX para as 249 contas), enquanto **a conta (`4.2.1.04.152`), o reduzido, o nível e a descrição continuam vindo da planilha** — são o que o contador definiu, e o generator não tem nada a ver com eles. O código do plano é único por **empresa/filial/exercício** e o generator é **um só, global**: por isso ele é sincronizado com o MAX global, e os códigos do próximo exercício continuam de onde pararam em vez de reiniciar em 1 (para uma chave interna referenciada por FK, isso é indiferente — repetir número não é) |
+
+### ✅ VERSÃO 4.18 (11/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
