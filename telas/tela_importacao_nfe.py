@@ -1087,6 +1087,16 @@ class TelaImportacaoNFe(ttk.Frame):
             d['indices_produto'] = self._indexar_produtos(prods)
             # lista completa, para a busca "escolher outro produto do ERP"
             d['produtos'] = prods
+            # índice por DESCRIÇÃO, para não cadastrar de novo um produto que já
+            # existe com outro código: 'PAPADA RED' do XML (código ESPSU001) é o
+            # produto 295 do ERP (código ESP800). Sem isto a importação criou 15
+            # duplicatas na base do cliente.
+            por_desc = {}
+            for r in prods:
+                chave = self._norm_desc(r.get('produto_descricao'))
+                if chave:
+                    por_desc.setdefault(chave, []).append(r)
+            d['prod_por_desc'] = por_desc
 
             chaves = set()
             for tab, col in (('TABELA_NF_SAIDA', 'NFS_CHAVE_DANFE'),
@@ -1305,7 +1315,22 @@ class TelaImportacaoNFe(ttk.Frame):
                 status = f'AMBÍGUO ({len(ambiguos)}: {", ".join(map(str, ambiguos))})'
                 tag = 'ERRO'
             elif info is None:
-                status, tag = 'NÃO ENCONTRADO', 'ERRO'
+                # O código não existe no ERP — mas a DESCRIÇÃO pode existir. Foi
+                # assim que a importação criou 15 duplicatas na base do cliente:
+                # 'PAPADA RED' (código ESPSU001 no XML) já era o produto 295
+                # (código ESP800 no ERP), e cadastrar de novo criou a segunda via
+                # do mesmo item. Não escolhe por conta própria: bloqueia e manda
+                # conferir, porque descrição igual é forte indício, não prova.
+                iguais = self._por_descricao(dados, (reg['item'] or {}).get('x_prod'))
+                if iguais:
+                    info = dict(iguais[0])
+                    cods = ', '.join(str(p['codigo']) for p in iguais[:3])
+                    status = (f"CONFERIR (código não existe no ERP, mas a DESCRIÇÃO "
+                              f"é igual à do produto {cods} — duplo clique: vincular "
+                              f"ou cadastrar novo)")
+                    tag = 'ERRO'
+                else:
+                    status, tag = 'NÃO ENCONTRADO', 'ERRO'
             elif self._prod_confirmado.get(cod) == (info['codigo'] if info else None):
                 # conferido na tela, campo a campo, e aprovado pelo usuário
                 status = f"OK (conferido na tela: {info['codigo']})"
@@ -1416,8 +1441,9 @@ class TelaImportacaoNFe(ttk.Frame):
                                    + (', ...' if len(ambig) > 4 else '') + ')')
                 conf = [c for c in cods_pend if c in conf_prod and c not in amb_prod]
                 if conf:
-                    motivos.append('fase 3: produto casou por palpite e o NCM/unidade '
-                                   'não fecham — duplo clique na aba 3 para conferir ('
+                    motivos.append('fase 3: produto achado por semelhança (dígitos do '
+                                   'código ou descrição) — duplo clique na aba 3 para '
+                                   'conferir e decidir ('
                                    + ', '.join(conf[:4])
                                    + (', ...' if len(conf) > 4 else '') + ')')
                 novos = [c for c in cods_pend if c in novo_prod]
@@ -1496,6 +1522,35 @@ class TelaImportacaoNFe(ttk.Frame):
     def _so_ncm(valor):
         """NCM comparável: '0204.50.00' e '02045000' são o mesmo NCM."""
         return re.sub(r'\D', '', str(valor or ''))
+
+    @staticmethod
+    def _norm_desc(valor):
+        """Descrição comparável: só letras e números, maiúsculas.
+
+        'PAPADA RED' e 'Papada  Red.' viram a mesma chave. Serve para reconhecer
+        que o produto do XML já existe no ERP com outro código — e não criar a
+        segunda via dele.
+        """
+        return re.sub(r'[^A-Z0-9]', '', str(valor or '').upper())
+
+    @classmethod
+    def _por_descricao(cls, dados, descricao):
+        """Produtos do ERP com exatamente esta descrição (lista, pode ter mais de um)."""
+        chave = cls._norm_desc(descricao)
+        if not chave:
+            return []
+        brutos = (dados.get('prod_por_desc') or {}).get(chave) or []
+        # devolve no formato do índice (o mesmo que a conferência espera)
+        return [{'codigo': int(r['produto_codigo']),
+                 'descricao': str(r.get('produto_descricao') or '').strip(),
+                 'ativo': str(r.get('produto_ativo') or '').strip().upper(),
+                 'cod_importacao': str(r.get('produto_cod_importacao') or '').strip(),
+                 'cod_auxiliar': str(r.get('produto_cod_auxiliar') or '').strip(),
+                 'ncm': str(r.get('produto_class_fiscal') or '').strip(),
+                 'unidade': str(r.get('produto_unidade_cv')
+                                or r.get('produto_unidade_est') or '').strip(),
+                 'cbarra': str(r.get('produto_cbarra') or '').strip()}
+                for r in brutos]
 
     @classmethod
     def _divergencias_produto(cls, item, info):
@@ -1701,6 +1756,10 @@ class TelaImportacaoNFe(ttk.Frame):
             cod = f['cod_xml']
             if acao == 'confirmar':
                 self._prod_confirmado[cod] = int(info['codigo'])
+                # grava também como escolha: quando o casamento veio da DESCRIÇÃO
+                # (o código do XML não existe no ERP), é a escolha que faz a nota
+                # apontar para este produto — só confirmar não bastaria.
+                self._prod_escolhido[cod] = int(info['codigo'])
                 self._prod_novo.discard(cod)
             elif acao == 'novo':
                 self._prod_novo.add(cod)
@@ -2338,6 +2397,132 @@ class TelaImportacaoNFe(ttk.Frame):
                                          "Reanalise para atualizar as fases.")
         self._oferecer_log(log, "LOG_NATUREZAS_NFE.txt")
 
+    def _escolher_grupo_produto(self, emp, fil, quantos):
+        """Grupo, subgrupo e tipo dos produtos que vão ser cadastrados.
+
+        Era `1` fixo para grupo e subgrupo, e na base do cliente o grupo 1 é
+        "ATIVOS" — o de imobilizado, onde estão o FIAT STRADA e a CADEIRA DE
+        ESCRITORIO. Os 53 produtos que a importação cadastrou foram todos para lá,
+        em vez de MAIALE DUROC, BERKSHIRE, LINGUIÇAS. Produto no grupo errado
+        contamina relatório de vendas, curva ABC e classificação contábil.
+
+        Devolve (grupo, subgrupo, tipo) ou None se o usuário desistir.
+        """
+        try:
+            with FirebirdService(self.config_db) as fb:
+                grupos = fb.query(
+                    "SELECT GRUPO_CODIGO C, GRUPO_DESCRICAO D FROM TABELA_GRUPO "
+                    "WHERE GRUPO_EMPRESA = ? AND GRUPO_FILIAL = ? ORDER BY GRUPO_DESCRICAO",
+                    [emp, fil])
+                subs = fb.query(
+                    "SELECT SUBGRUPO_CODIGO C, SUBGRUPO_DESCRICAO D, SUBGRUPO_GRUPO G "
+                    "FROM TABELA_SUBGRUPO WHERE SUBGRUPO_EMPRESA = ? AND "
+                    "SUBGRUPO_FILIAL = ? ORDER BY SUBGRUPO_DESCRICAO", [emp, fil])
+        except Exception as e:
+            messagebox.showerror("Erro", f"Não foi possível ler os grupos do ERP:\n{e}")
+            return None
+        if not grupos:
+            messagebox.showerror(
+                "Sem grupo", f"A empresa {emp}/filial {fil} não tem nenhum grupo de "
+                             f"produto cadastrado (TABELA_GRUPO).\n\nCadastre o grupo "
+                             f"no ERP antes de importar produtos — sem grupo o produto "
+                             f"entra solto e atrapalha relatório e contabilidade.")
+            return None
+
+        top = tk.Toplevel(self)
+        top.title("Cadastrar produtos — grupo e subgrupo")
+        top.transient(self.winfo_toplevel())
+        top.resizable(False, False)
+        resultado = {}
+
+        tk.Label(top, text=f"{quantos} produto(s) vão ser cadastrados no ERP",
+                 font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, padx=14, pady=(12, 2))
+        tk.Label(top, text="O código do XML vai para o Código Auxiliar e o de "
+                           "Importação, e o produto recebe o próximo código livre.",
+                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14)
+        tk.Label(top, text="Escolha o grupo e o subgrupo. Isso não era perguntado e "
+                           "todo produto ia para o grupo 1 —\nque neste banco é "
+                           "“ATIVOS”, o do imobilizado.",
+                 font=("Segoe UI", 9), justify=tk.LEFT,
+                 fg="#922B21").pack(anchor=tk.W, padx=14, pady=(10, 8))
+
+        rot_g = {f"{g['c']} - {str(g['d'] or '').strip()}": int(g['c']) for g in grupos}
+        linha1 = tk.Frame(top)
+        linha1.pack(fill=tk.X, padx=14, pady=3)
+        tk.Label(linha1, text="Grupo:", font=("Segoe UI", 9, "bold"),
+                 width=10, anchor=tk.W).pack(side=tk.LEFT)
+        cmb_g = ttk.Combobox(linha1, width=44, state="readonly",
+                             font=("Segoe UI", 9), values=list(rot_g))
+        cmb_g.pack(side=tk.LEFT)
+
+        linha2 = tk.Frame(top)
+        linha2.pack(fill=tk.X, padx=14, pady=3)
+        tk.Label(linha2, text="Subgrupo:", font=("Segoe UI", 9, "bold"),
+                 width=10, anchor=tk.W).pack(side=tk.LEFT)
+        cmb_s = ttk.Combobox(linha2, width=44, state="readonly", font=("Segoe UI", 9))
+        cmb_s.pack(side=tk.LEFT)
+        lbl_s = tk.Label(top, text="", font=("Segoe UI", 8), fg="#555")
+        lbl_s.pack(anchor=tk.W, padx=14)
+
+        def subgrupos_do_grupo(*_):
+            g = rot_g.get(cmb_g.get())
+            # o código do subgrupo se repete entre grupos (o 1 existe no grupo 1 e
+            # no 24), então a lista é sempre filtrada pelo grupo escolhido
+            do_grupo = [s for s in subs if int(s['g'] or 0) == (g or -1)]
+            vals = [f"{s['c']} - {str(s['d'] or '').strip()}" for s in do_grupo]
+            cmb_s['values'] = vals
+            cmb_s.set(vals[0] if vals else '')
+            lbl_s.config(text=("" if vals else
+                               "⚠ este grupo não tem subgrupo cadastrado — o produto "
+                               "vai sem subgrupo"))
+
+        cmb_g.bind("<<ComboboxSelected>>", subgrupos_do_grupo)
+
+        # volta na escolha da última vez (por banco, como o resto da tela)
+        salvo = self.config.get(self.SECAO, 'produto_grupo', fallback='')
+        for rot, cod in rot_g.items():
+            if str(cod) == str(salvo).strip():
+                cmb_g.set(rot)
+                break
+        if not cmb_g.get():
+            cmb_g.set(list(rot_g)[0])
+        subgrupos_do_grupo()
+        sub_salvo = self.config.get(self.SECAO, 'produto_subgrupo', fallback='')
+        for v in cmb_s['values']:
+            if v.split(' - ')[0].strip() == str(sub_salvo).strip():
+                cmb_s.set(v)
+                break
+
+        tipo = self.config.get('IMPORTACAO', 'tipo', fallback='4')
+        try:
+            tipo_id = int(str(tipo).split('-')[0].strip())
+        except (ValueError, IndexError):
+            tipo_id = 4
+        tk.Label(top, text=f"Tipo do produto: {tipo_id} (definido em Importação)",
+                 font=("Segoe UI", 8), fg="#555").pack(anchor=tk.W, padx=14, pady=(8, 0))
+
+        def confirmar():
+            g = rot_g.get(cmb_g.get())
+            if not g:
+                return messagebox.showwarning("Aviso", "Escolha o grupo.")
+            s = cmb_s.get().split(' - ')[0].strip()
+            resultado['v'] = (g, int(s) if s.isdigit() else None, tipo_id)
+            if not self.config.has_section(self.SECAO):
+                self.config.add_section(self.SECAO)
+            self.config.set(self.SECAO, 'produto_grupo', str(g))
+            self.config.set(self.SECAO, 'produto_subgrupo', str(s))
+            self._salvar_config()
+            top.destroy()
+
+        rodape = tk.Frame(top)
+        rodape.pack(fill=tk.X, padx=14, pady=12)
+        ttk.Button(rodape, text=f"Cadastrar {quantos} produto(s)",
+                   command=confirmar).pack(side=tk.LEFT)
+        ttk.Button(rodape, text="Cancelar", command=top.destroy).pack(side=tk.RIGHT)
+        top.grab_set()
+        self.wait_window(top)
+        return resultado.get('v')
+
     def _cadastrar_produtos(self):
         # entra o que não existe no ERP e o que o usuário DECIDIU cadastrar como
         # novo na conferência. Linha em CONFERIR fica fora de propósito: ela tem um
@@ -2360,22 +2545,55 @@ class TelaImportacaoNFe(ttk.Frame):
                    f"NCM/unidade não fecham. DUPLO CLIQUE na linha para ver o XML e o "
                    f"cadastro do ERP lado a lado: lá dá para confirmar, trocar o produto "
                    f"ou mandar cadastrar como novo." if conferir else ""))
-        if not messagebox.askyesno(
-                "Confirmar",
-                f"Cadastrar {len(pend)} produto(s)?\n\n"
-                "O código do XML vai para o Código Auxiliar e o de Importação,\n"
-                "e o produto recebe o próximo código livre do ERP."):
-            return
         # o produto é cadastro: entra na filial dos cadastros
         emp, fil = self._emp_fil_analise(cadastros=True)
-        tipo = self.config.get('IMPORTACAO', 'tipo', fallback='4')
-        try:
-            tipo_id = int(str(tipo).split('-')[0].strip())
-        except (ValueError, IndexError):
-            tipo_id = 4
+        # Grupo e subgrupo são escolhidos aqui. Eram '1' fixo — e na base do
+        # cliente o grupo 1 é "ATIVOS" (imobilizado: FIAT STRADA, CADEIRA DE
+        # ESCRITORIO). Todo produto cadastrado pela importação foi para lá, em vez
+        # de MAIALE DUROC, BERKSHIRE, LINGUIÇAS...
+        escolha = self._escolher_grupo_produto(emp, fil, len(pend))
+        if not escolha:
+            return
+        grupo_id, subgrupo_id, tipo_id = escolha
         log = []
         try:
             with FirebirdService(self.config_db) as fb:
+                # última barreira contra duplicata: descrição que já existe no ERP
+                # não é cadastrada de novo, a não ser que o usuário tenha dito
+                # explicitamente "cadastrar como novo" naquela linha.
+                por_desc = {}
+                for r in fb.query("SELECT PRODUTO_CODIGO, PRODUTO_DESCRICAO "
+                                  "FROM TABELA_PRODUTO WHERE PRODUTO_EMPRESA = ? "
+                                  "AND PRODUTO_FILIAL = ?", [emp, fil]):
+                    k = self._norm_desc(r.get('produto_descricao'))
+                    if k:
+                        por_desc.setdefault(k, []).append(r['produto_codigo'])
+                pulados = []
+                for f in list(pend):
+                    if f['cod_xml'] in self._prod_novo:
+                        continue          # decisão explícita do usuário: respeita
+                    ja = por_desc.get(self._norm_desc((f['item'] or {}).get('x_prod')))
+                    if ja:
+                        pend.remove(f)
+                        pulados.append((f, ja))
+                for f, ja in pulados:
+                    cods = ', '.join(str(c) for c in ja[:3])
+                    f['status'] = (f"CONFERIR (já existe produto {cods} com esta "
+                                   f"descrição — duplo clique: vincular ou "
+                                   f"cadastrar novo)")
+                    f['tag'] = 'ERRO'
+                    log.append(f"⏭ {f['cod_xml']} NÃO cadastrado: já existe produto "
+                               f"{cods} com a descrição "
+                               f"'{str((f['item'] or {}).get('x_prod'))[:40]}'")
+                if not pend:
+                    self._oferecer_log(log, "LOG_PRODUTOS_NFE.txt")
+                    return messagebox.showinfo(
+                        "Nada a cadastrar",
+                        f"Os {len(pulados)} produto(s) da lista já existem no ERP "
+                        f"com a mesma descrição, só com outro código.\n\n"
+                        f"Dê DUPLO CLIQUE em cada linha para vincular ao produto "
+                        f"que já existe — ou, se for item diferente mesmo, use "
+                        f"“Cadastrar como produto NOVO” lá dentro.")
                 usados = set()
                 for r in fb.query("SELECT PRODUTO_CODIGO FROM TABELA_PRODUTO "
                                   "WHERE PRODUTO_EMPRESA = ? AND PRODUTO_FILIAL = ?", [emp, fil]):
@@ -2392,7 +2610,8 @@ class TelaImportacaoNFe(ttk.Frame):
                     }
                     d = DataTransformer.prepare_produto(
                         xml_mock, {'empresa': emp, 'filial': fil},
-                        {'tipo': tipo_id, 'grupo_id': 1, 'subgrupo_id': 1, 'producao_sistec': 'N'})
+                        {'tipo': tipo_id, 'grupo_id': grupo_id,
+                         'subgrupo_id': subgrupo_id, 'producao_sistec': 'N'})
                     d['PRODUTO_CODIGO'] = str(prox)
                     d['PRODUTO_COD_AUXILIAR'] = f['cod_xml']
                     d['PRODUTO_COD_IMPORTACAO'] = f['cod_xml']

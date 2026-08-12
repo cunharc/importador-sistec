@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.21                            │
+│                      VERSÃO 4.22                            │
 │                   Data: 12/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.21 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.22 - RELEASE ATUAL (12/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **Produto cadastrado ia todo para o grupo 1 — que na base do cliente é “ATIVOS”, o do imobilizado.** O grupo e o subgrupo eram **`1` fixo** no código, nunca perguntados. Resultado: os 53 produtos que a importação criou (linguiças, leitoa, carcaça, ragu) foram todos para o mesmo grupo do FIAT STRADA e da CADEIRA DE ESCRITÓRIO, ignorando os 24 grupos que o cliente tem (MAIALE DUROC, BERKSHIRE, LINGUIÇAS CONGELADAS, MATÉRIA PRIMA…). Produto no grupo errado contamina relatório de vendas, curva ABC e classificação contábil. Agora o cadastro **pergunta o grupo e o subgrupo**, lidos do próprio ERP, com o subgrupo **filtrado pelo grupo escolhido** (o código do subgrupo se repete entre grupos: o `1` existe no grupo 1 e no 24, então listar todos deixaria escolher combinação inexistente). A escolha fica guardada por banco, e empresa/filial sem nenhum grupo cadastrado passa a ser um aviso claro em vez de um produto solto |
+| Importação Notas Fiscais   | ✅ PRONTO | 🐞 **A importação criou 15 produtos que já existiam no ERP com outro código.** O casamento era só por código (ERP, importação, auxiliar); não achando, cadastrava. Só que `ESPSU001 / PAPADA RED` do XML **é** o produto 295 do ERP (`ESP800`, mesma descrição), e `FB00001 / KIT DE CORTES SUINOS` é o 113 (`KIT010`). Nasceram 15 segundas vias do mesmo item — que dividem histórico, estoque e preço. Agora, quando o código não existe, a **descrição** é confrontada com o cadastro (comparação por letras e números, então `PAPADA RED` = `Papada  Red.`): achando, a linha vira **CONFERIR** e **bloqueia**, mostrando na grade qual produto do ERP é o candidato. O duplo clique resolve — *vincular* ao que existe ou *cadastrar como novo* se for item diferente mesmo. Descrição igual é indício forte, não prova: o sistema não escolhe sozinho nem para vincular nem para criar. E na hora de cadastrar há uma **última barreira**: descrição que já existe no ERP não é criada (a menos que você tenha dito explicitamente “cadastrar como novo” naquela linha), com o motivo no log |
+| Importação Notas Fiscais   | ✅ PRONTO | **O AMBÍGUO que apareceu depois não vem da importação.** Reproduzindo o índice do sistema sobre o cadastro real: existe **um** caso, e é anterior — o código de importação `DFD105` está em dois produtos ATIVOS do cliente, o **10 (BANHA SUINA BALDE 3KG)** e o **107 (BACON REDONDO)**, ambos com importação *e* auxiliar `DFD105`. Dois produtos diferentes com o mesmo código é erro de cadastro, e o sistema faz o certo: não escolhe por conta própria, marca AMBÍGUO e pede o duplo clique. Nenhum dos 53 produtos criados gerou código repetido (zero duplicidade em código de importação e em auxiliar) |
+
+### ✅ VERSÃO 4.21 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
