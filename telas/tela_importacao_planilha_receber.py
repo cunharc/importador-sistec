@@ -1132,6 +1132,10 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
         inseridos = 0
         erros = 0
         excluidos = 0
+        pulados_avulso = 0     # avulsos que já estavam no ERP
+        sem_cliente = 0        # linhas cujo cliente não existe no cadastro
+        titulos_existentes = 0 # títulos que já existiam (só parcelas novas)
+        grupos_sem_novidade = 0
         try:
             emp = int(self.config.get('IMPORTACAO', 'empresa', fallback='1'))
             fil = int(self.config.get('IMPORTACAO', 'filial', fallback='1'))
@@ -1153,17 +1157,21 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                 # Assinaturas de avulsos ja importados (cliente + valor +
                 # vencimento). Como avulsos ganham codigo novo a cada vez, esta e
                 # a unica forma de nao reimporta-los em duplicidade.
-                avulsos_existentes = set()
+                # Guarda o codigo/serie de quem ja esta la, para o log dizer
+                # QUAL titulo bloqueou a linha (antes so dizia "ja importado").
+                avulsos_existentes = {}
                 for row in fb.query(
-                    "SELECT TIT_CLIENTE, TIT_TOTAL, TIT_VENCIMENTO FROM TABELA_TITULO_REC "
+                    "SELECT TIT_CODIGO, TIT_SERIE, TIT_CLIENTE, TIT_TOTAL, TIT_VENCIMENTO "
+                    "FROM TABELA_TITULO_REC "
                     "WHERE TIT_EMPRESA = ? AND TIT_FILIAL = ? AND TIT_ORIGEM = 'IMP'",
                     [emp, fil]
                 ):
-                    avulsos_existentes.add((
-                        row['tit_cliente'],
-                        round(float(row['tit_total'] or 0), 2),
-                        row['tit_vencimento'].isoformat() if row['tit_vencimento'] else ''
-                    ))
+                    sig = (row['tit_cliente'],
+                           round(float(row['tit_total'] or 0), 2),
+                           row['tit_vencimento'].isoformat() if row['tit_vencimento'] else '')
+                    avulsos_existentes.setdefault(
+                        sig, f"{str(row['tit_codigo'] or '').strip()}/"
+                             f"{str(row['tit_serie'] or '').strip()}")
 
                 # ---- Caches (eliminam consulta de cliente/vendedor por título) ----
                 self.parent.after(0, lambda: self.lbl_status.config(text="Carregando clientes e vendedores..."))
@@ -1254,7 +1262,13 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                         cache_cliente[chave_cli] = cliente_codigo
 
                     if cliente_codigo is None:
-                        log_linhas.append(f"⚠ {num_doc} — Cliente não encontrado, pulando linha")
+                        # Dizer QUEM não foi achado: sem isso não há como
+                        # corrigir o cadastro nem saber quanto ficou de fora.
+                        log_linhas.append(
+                            f"⚠ {num_doc} — Cliente não encontrado no ERP, linha fora: "
+                            f"documento '{documento}' / razão '{razao[:40]}' "
+                            f"(valor {self._parse_valor(item.get('valor', '0')):.2f})")
+                        sem_cliente += 1
                         erros += 1
                         continue
 
@@ -1310,9 +1324,28 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
 
                         if not itens_novos:
                             log_linhas.append(f"⚠ {num_doc} — Todas as parcelas já existem, pulando grupo")
+                            grupos_sem_novidade += 1
                             continue
 
                         total_grupo = sum(self._parse_valor(item.get('valor', '0')) for item in itens_novos)
+
+                        # Trava anti-duplicidade dos avulsos (linhas sem número de
+                        # documento, que ganham código novo a cada importação):
+                        # confere ANTES de montar o plano, senão o log escreve as
+                        # parcelas e só depois diz que pulou — parecia que tinha
+                        # importado e desfeito.
+                        eh_avulso = bool(ref.get('_numero_doc_auto'))
+                        sig_avulso = (cliente_codigo, round(total_grupo, 2),
+                                      vencimento.isoformat() if vencimento else '')
+                        if eh_avulso and sig_avulso in avulsos_existentes:
+                            onde = avulsos_existentes[sig_avulso]
+                            venc_txt = vencimento.strftime('%d/%m/%Y') if vencimento else '-'
+                            log_linhas.append(
+                                f"⏭ Avulso já estava no ERP — título {onde}, cliente "
+                                f"{cliente_codigo}, valor {total_grupo:.2f}, venc {venc_txt}. "
+                                f"Não reimportado.")
+                            pulados_avulso += 1
+                            continue
 
                         def inserir_titulo(valor_tit, num_parcelas, observacao=''):
                             sql = """
@@ -1538,16 +1571,10 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
 
                         n_parcelas = len(plano)
 
-                        # Trava anti-duplicidade para avulsos (sem numero de
-                        # documento): se ja existe um titulo IMP com o mesmo
-                        # cliente + valor + vencimento, nao reimporta.
-                        eh_avulso = bool(ref.get('_numero_doc_auto'))
                         if eh_avulso:
-                            sig = (cliente_codigo, round(total_grupo, 2), vencimento.isoformat() if vencimento else '')
-                            if sig in avulsos_existentes:
-                                log_linhas.append(f"  {num_doc} — Avulso ja importado (cliente {cliente_codigo}, valor {total_grupo:.2f}), pulando")
-                                continue
-                            avulsos_existentes.add(sig)
+                            # marca o que acabou de entrar, para a mesma planilha
+                            # não gravar o mesmo avulso duas vezes
+                            avulsos_existentes[sig_avulso] = f"{codigo_tit}/{serie}"
 
                         if not titulo_existe:
                             inserir_titulo(total_grupo, n_parcelas, observacao_tit)
@@ -1555,6 +1582,7 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                             tit_existentes[(codigo_tit, serie, cliente_codigo)] = True
                         else:
                             log_linhas.append(f"  {num_doc} \u2014 Titulo existente, inserindo apenas parcelas novas")
+                            titulos_existentes += 1
                             cur.execute("""
                                 UPDATE TABELA_TITULO_REC SET
                                     TIT_TOTAL = COALESCE(TIT_TOTAL, 0) + ?,
@@ -1587,6 +1615,13 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                 fb.conn.commit()  # grava o restante
 
             msg = f"Processamento conclu\u00eddo!\n\n{inseridos} t\u00edtulo(s) cadastrados."
+            if titulos_existentes:
+                msg += f"\n{titulos_existentes} t\u00edtulo(s) j\u00e1 existiam \u2014 entraram s\u00f3 as parcelas novas."
+            if pulados_avulso:
+                msg += (f"\n{pulados_avulso} avulso(s) sem n\u00famero de documento j\u00e1 estavam "
+                        f"no ERP e N\u00c3O foram reimportados.")
+            if sem_cliente:
+                msg += f"\n{sem_cliente} linha(s) ficaram fora: cliente n\u00e3o cadastrado."
             if excluidos:
                 msg += f"\n{excluidos} t\u00edtulo(s) EXCLU\u00cdDO/SUBSTITU\u00cdDO trazidos baixados (comp\u00f5em o total)."
             if erros:
@@ -1595,6 +1630,24 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                 log_linhas.append(f"RESUMO: {excluidos} t\u00edtulo(s) EXCLU\u00cdDO/SUBSTITU\u00cdDO trazidos baixados na emiss\u00e3o, com o STATUS na observa\u00e7\u00e3o.")
             self.parent.after(0, lambda m=msg: self._safe_showinfo("Conclu\u00eddo", m))
 
+            # Resumo no TOPO do log: sem isso o arquivo abre em centenas de
+            # linhas "pulando" e parece que a importacao falhou, quando na
+            # verdade aquelas linhas ja estavam no ERP.
+            resumo = [
+                "RESUMO DESTA IMPORTACAO",
+                f"  titulos cadastrados agora            : {inseridos}",
+                f"  titulos que ja existiam (so parcelas): {titulos_existentes}",
+                f"  grupos sem parcela nova              : {grupos_sem_novidade}",
+                f"  avulsos que ja estavam no ERP        : {pulados_avulso}",
+                f"  linhas sem cliente cadastrado        : {sem_cliente}",
+                f"  erros                                : {erros - sem_cliente}",
+                "",
+                "Avulso = linha sem numero de documento. Como ela recebe um codigo",
+                "novo a cada importacao, a unica forma de nao duplicar e comparar",
+                "cliente + valor + vencimento com o que ja esta no ERP.",
+                "",
+            ]
+            log_linhas = resumo + log_linhas
             log_str = "\n".join(log_linhas)
             self.parent.after(0, lambda l=log_str: self._oferecer_log(l))
 

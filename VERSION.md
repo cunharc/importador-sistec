@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.25                            │
+│                      VERSÃO 4.26                            │
 │                   Data: 13/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.25 - RELEASE ATUAL (13/08/2026)
+### ✅ VERSÃO 4.26 - RELEASE ATUAL (13/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Receber         | ✅ PRONTO | **O log agora explica por que uma linha não entrou, em vez de repetir “pulando”.** Reimportar a mesma planilha gerava centenas de `Avulso ja importado (cliente 448, valor 56311.25), pulando` — e, pior, a linha da parcela era escrita **antes** da mensagem, então parecia que o título tinha sido importado e desfeito. Agora a trava roda **antes** de montar o plano, e a mensagem diz **qual título do ERP bloqueou**: `⏭ Avulso já estava no ERP — título 2/IMP, cliente 448, valor 56311.25, venc 20/07/2026. Não reimportado.` O log passou a abrir com um **RESUMO**: títulos cadastrados agora, títulos que já existiam, grupos sem parcela nova, avulsos que já estavam no ERP, linhas sem cliente e erros — mais a explicação de o que é “avulso” (linha sem número de documento, que ganha código novo a cada importação, então a única defesa contra duplicidade é comparar cliente + valor + vencimento). A mensagem final também passou a somar essas contagens |
+| Importação Receber         | ✅ PRONTO | **“Cliente não encontrado” agora diz QUEM não foi encontrado.** Antes: `⚠ 00014856 — Cliente não encontrado, pulando linha`. Agora sai o documento, a razão social e o valor da linha, que é o que permite corrigir o cadastro — na planilha da FABENE, por exemplo, o único título novo do arquivo é da `NOTIZIA PIZZARIA E EVENTOS LTDA` (CNPJ 54.468.011/0001-20, R$ 80,15), cliente que não existe na base |
+
+### ✅ VERSÃO 4.25 (13/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|
