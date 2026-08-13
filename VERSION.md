@@ -3,14 +3,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.26                            │
+│                      VERSÃO 4.27                            │
 │                   Data: 13/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.26 - RELEASE ATUAL (13/08/2026)
+### ✅ VERSÃO 4.27 - RELEASE ATUAL (13/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Transportadoras | ✅ PRONTO | **Nova tela: Importar Transportadoras (Excel)** — grava na `TABELA_TRANSPORTADORA` com mapeamento de colunas. Antes de escrever a tela, a tabela foi validada no banco: PK `(TRANS_EMPRESA, TRANS_FILIAL, TRANS_CODIGO)`, as três `INTEGER NOT NULL`, e **as outras 77 colunas aceitam NULL** — então dá para importar só a razão social e completar depois. **Não existe generator** para o código (nenhum `GEN_*TRANS*` serve) e **não há trigger `BEFORE INSERT`**: nada é preenchido pelo banco, o código vem da planilha ou de `MAX+1` por empresa/filial, revalidado no momento de gravar (se alguém cadastrar pela tela do ERP no meio, o número não colide). Sem CHECK constraint e sem validação de domínio. FKs que saem: `TABELA_FILIAL`, `TABELA_CIDADE` e `TABELA_ENTREGADOR` (esta fica NULL — a tabela está vazia na base). 24 tabelas apontam para a transportadora (PEDIDO, ROMANEIO, ORDEM_CARREGAMENTO, VEICULO, NF_ENTRADA_TRANS, TICKET_BALANCA, MDF-e) além do `CF_TRANSPORTADORA` do cliente, e é por isso que o código certo importa |
+| Importação Transportadoras | ✅ PRONTO | **Mapeamento de 23 colunas, só a Razão Social obrigatória**: código, CNPJ/CPF, IE/RG, endereço, número, complemento, bairro, CEP, cidade, UF, cód. IBGE, telefone, celular, contato, e-mail, e-mail NF-e, placa, UF da placa, RNTRC, % comissão, observação e código antigo (que vai para `TRANS_CODIGO_IMPORTACAO` + `TRANS_COD_IMPORTA`, para reconciliar com o sistema antigo). A análise **barra** antes de gravar: razão social vazia, **CNPJ/CPF com dígito verificador errado** (documento inválido na transportadora reprova a NF-e na SEFAZ), CNPJ repetido na planilha, código já ocupado ou repetido. Avisa sem barrar: razão social cortada em 50 e cidade não resolvida. Transportadora que já existe (casada por CNPJ, ou por razão social quando não há documento) vira **JÁ CADASTRADO** e pode ser marcada como **Atualizar**, gravando **só os campos marcados** na faixa própria — e célula vazia na planilha **não apaga** o que está no ERP. Grade com status colorido, colunas ordenáveis, filtro, exportação da conferência em CSV e log da gravação |
+| Importação Transportadoras | ✅ PRONTO | **A cidade é resolvida contra o cadastro real, não escrita a esmo.** O `TRANS_CIDADE` é o código **interno** do ERP (9 dígitos = IBGE × 100 + sufixo), não o IBGE de 7 — gravar o IBGE direto quebraria a FK. E um mesmo IBGE tem **várias linhas**: a sede e os distritos (São Paulo = `355030800`, mas também VILA MARIANA, LAJEADO…; Fortaleza = `230440005` com MESSEJANA, MONDUBIM…). A tela prefere a **sede**, que é a linha de menor código de 9 dígitos daquele IBGE — regra conferida contra a `TABELA_CIDADES_IBGE`: acerta o nome do município em **5.563 dos 5.564** (a única divergência é grafia, MOGI/MOJI MIRIM). Resolve por Cód. IBGE, por nome+UF ou por nome quando é único; quando é ambíguo (`BOM JESUS` existe em RS e SC; `SAO JOSE/CE` tem 2 cadastros) **não escolhe** — avisa e pede a UF ou o IBGE, e a linha importa sem cidade em vez de importar na cidade errada. O nome da planilha fica guardado em `TRANS_CIDADE_DESC`/`TRANS_CIDADE_IMPORTACAO`. Testado com `INSERT`/`UPDATE` reais no banco do cliente dentro de transação **revertida**: 30 colunas na linha completa, 4 na mínima, e a tabela voltou intacta |
+
+### ✅ VERSÃO 4.26 (13/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

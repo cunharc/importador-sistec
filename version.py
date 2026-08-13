@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "4.26"
+VERSAO = "4.27"
 DATA_VERSAO = "13/08/2026"
 
 MODULOS = {
@@ -92,6 +92,10 @@ MODULOS = {
     "Importação Estoque de Produção": {
         "status": "ajustes",
         "descricao": "Importa estoque de Produto Acabado por etiquetas via planilha, gerando Ordem de Desossa de inventário, itens PA e as pesagens"
+    },
+    "Importação Transportadoras": {
+        "status": "pronto",
+        "descricao": "Importação de transportadoras via planilha, com validação de CNPJ/CPF e resolução da cidade pelo IBGE ou nome+UF"
     }
 }
 

@@ -26,6 +26,7 @@ from telas.tela_importacao_planilha_pagar import TelaImportacaoPlanilhaPagar
 from telas.tela_importacao_planilha_lista_precos import TelaImportacaoPlanilhaListaPrecos
 from telas.tela_importacao_planilha_tributacao import TelaImportacaoPlanilhaTributacao
 from telas.tela_importacao_planilha_estoque_producao import TelaImportacaoPlanilhaEstoqueProducao
+from telas.tela_importacao_planilha_transportadora import TelaImportacaoPlanilhaTransportadora
 from telas.tela_importacao_nfe import TelaImportacaoNFe
 from telas.tela_duplicar_empresa import TelaDuplicarEmpresa
 from telas.tela_vinculo_cc import TelaVinculoCC
@@ -334,6 +335,8 @@ class TelaInicial(tk.Frame):
              "#F39C12", "_abrir_busca_logs", None, "🕵️", ("outros",)),
             ("Importar Clientes (Excel)", "Importação de clientes com mapeamento de colunas via planilha (XLSX/CSV) para cadastro no ERP.",
              "#14146E", "_abrir_importacao_planilha_clientes", None, "👤", ("excel",)),
+            ("Importar Transportadoras (Excel)", "Cadastro de transportadoras via planilha (XLSX/CSV) com mapeamento de colunas, validação de CNPJ/CPF e resolução da cidade pelo IBGE ou pelo nome+UF.",
+             "#0E7490", "_abrir_importacao_planilha_transportadora", None, "🚚", ("excel",)),
             ("Importar Contas a Receber (Excel)", "Importação de títulos e parcelas de contas a receber com mapeamento de colunas via planilha (XLSX/CSV).",
              "#E67E22", "_abrir_importacao_planilha_receber", None, "💰", ("excel",)),
             ("Importar Contas a Pagar (Excel)", "Importação de títulos e parcelas de contas a pagar com mapeamento de colunas via planilha (XLSX/CSV).",
@@ -763,6 +766,14 @@ class TelaInicial(tk.Frame):
         self.nome_tela_atual = "Importa\u00e7\u00e3o de Clientes via Planilha"
         self._registrar_log(self.nome_tela_atual, "ENTROU")
         self.tela_atual = TelaImportacaoPlanilhaClientes(self.parent, callback_voltar=self._voltar_inicial)
+
+    def _abrir_importacao_planilha_transportadora(self):
+        self.pack_forget()
+        self.winfo_toplevel().title("Importação de Transportadoras via Planilha - Implantação Sistec")
+        self.nome_tela_atual = "Importação de Transportadoras via Planilha"
+        self._registrar_log(self.nome_tela_atual, "ENTROU")
+        self.tela_atual = TelaImportacaoPlanilhaTransportadora(
+            self.parent, callback_voltar=self._voltar_inicial)
 
     def _abrir_importacao_planilha_receber(self):
         self.pack_forget()
