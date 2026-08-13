@@ -3,14 +3,23 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.27                            │
+│                      VERSÃO 4.28                            │
 │                   Data: 13/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.27 - RELEASE ATUAL (13/08/2026)
+### ✅ VERSÃO 4.28 - RELEASE ATUAL (13/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Pagar           | ✅ PRONTO | 🐞 **A parcela ia com `TPARC_CONTA = 1` e `TPARC_CONTA_REDUZIDO = 0` — par que não existe no plano.** O ERP mostrava o campo preenchido e quebrava em qualquer movimentação, em **9.447 das 9.450 parcelas** gravadas. Três erros no mesmo lugar: (1) a rotina pegava a **primeira conta que o SELECT devolvia**, sem ordem — caiu no `1 - ATIVO`, conta **sintética de nível 1**, que não aceita lançamento; (2) usava a coluna `PLANO_CONTA` (a classificação, `"1.1.1.02.6"`) como valor de `TPARC_CONTA`, que na verdade tem FK para o `PLANO_CODIGO` (`FK_TITPARC_PLANOCONTA` → TABELA_PLANO) — passou pela FK só porque nessa conta os dois eram `1`; (3) fechava com `int(pr or 0)`, e como a conta sintética tem reduzido NULL, gravava **0** — conferido no banco: **nenhuma** das 249 contas do plano tem reduzido 0. Agora existe o campo **"Conta da baixa (banco/caixa)"** na tela: a conta é escolhida (CAIXA MATRIZ, SICOOB EY0324-0, BANCO ITAÚ…) e o **reduzido vem do próprio cadastro**, nunca de um `or 0`. Sem conta escolhida grava NULL em vez de um par inválido |
+| Importação Pagar           | ✅ PRONTO | **Parcela baixada sem conta agora é barrada antes de gravar.** Quem vem baixado precisa dizer em que conta o pagamento saiu; sem isso o ERP acusa erro. A importação para com aviso claro dizendo quantos títulos selecionados têm parcela baixada (paga, parcial ou cancelada — esta entra baixada na emissão) e que a conta da baixa é obrigatória nesse caso. A escolha fica guardada no config. Testado com `INSERT` real da parcela no banco do cliente em transação revertida: gravou `conta=5, reduzido=1, exercício=2026, PG='S'` e a FK aceitou |
+| Importação Receber / Pagar / Notas | ✅ PRONTO | **Centro de custo e conta contábil agora aceitam digitação — antes só dava para rolar a lista.** São **202 centros de custo** e **170 contas** no cadastro do cliente; `state="readonly"` obrigava a procurar rolando. Agora o campo filtra conforme se digita, por pedaços e sem depender de acento ou da ordem das palavras: *"receita revenda"* acha `130 - 3.1.1.01.77 RECEITA DE REVENDA DE MERCADORIAS`, *"sicoob"* acha a conta do banco, e digitar só `198` resolve pelo código. Enter (ou sair do campo) confirma a opção; texto que não corresponde a cadastro nenhum volta ao valor anterior, então nunca sobra na tela uma conta que não existe. Ambiguidade não é resolvida por chute: *"receita"* casa com duas contas e o campo espera você decidir. Vale nas três telas que têm esses campos — Contas a Receber, Contas a Pagar e Importação de Notas (XML) |
+| Importação Receber / Notas | ✅ PRONTO | **Conferência do reduzido nas outras telas: está correto.** Rateio contábil dos títulos conferido no banco — Receber grava `TCONT_CONTABIL = 130` com `TCONT_CONTABIL_REDUZIDO = 77`, Pagar grava `198` com `132`, e os dois pares batem com a TABELA_PLANO. As tabelas de nota (`TABELA_NF_SAIDA`/`ENTRADA` e itens) **não têm coluna de reduzido** — a classificação contábil da nota vai pelo título. O único lugar com reduzido errado era a parcela do Pagar |
+
+### ✅ VERSÃO 4.27 (13/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

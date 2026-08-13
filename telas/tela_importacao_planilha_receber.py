@@ -13,6 +13,7 @@ from utils.firebird_service import FirebirdService
 from utils import tema
 from utils import rateio_contabil
 from utils import multivalor
+from utils import combo_busca
 
 CAMPOS_DISPONIVEIS = [
     ("N\u00famero Documento *", "numero_doc", True),
@@ -192,13 +193,13 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
         rateio_row.pack(fill=tk.X, pady=2)
         tk.Label(rateio_row, text="Centro de custo:",
                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
-        self.cb_centro_custo = ttk.Combobox(rateio_row, state="readonly", width=30,
-                                            font=("Segoe UI", 9))
+        self.cb_centro_custo = ttk.Combobox(rateio_row, width=30, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cb_centro_custo)
         self.cb_centro_custo.pack(side=tk.LEFT, padx=2)
         tk.Label(rateio_row, text="Conta cont\u00e1bil:",
                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(12, 2))
-        self.cb_conta_contabil = ttk.Combobox(rateio_row, state="readonly", width=34,
-                                              font=("Segoe UI", 9))
+        self.cb_conta_contabil = ttk.Combobox(rateio_row, width=34, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cb_conta_contabil)
         self.cb_conta_contabil.pack(side=tk.LEFT, padx=2)
         ttk.Button(rateio_row, text="\u21bb", width=3,
                    command=self._carregar_rateio).pack(side=tk.LEFT, padx=(4, 0))
@@ -355,11 +356,10 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
         for combo, valores, chave in ((self.cb_centro_custo, rot_cc, 'centro_custo'),
                                       (self.cb_conta_contabil, rot_ct, 'conta_contabil')):
             atual = combo.get()
-            combo['values'] = valores
             salvo = self.config.get(secao, chave, fallback='') if \
                 self.config.has_section(secao) else ''
             escolha = atual if atual in valores else (salvo if salvo in valores else valores[0])
-            combo.set(escolha)
+            combo_busca.definir_valores(combo, valores, manter=escolha)
 
     def _emp_fil_rateio(self):
         """Empresa/filial da seção de importação (os títulos usam as mesmas)."""

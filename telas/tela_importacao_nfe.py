@@ -47,6 +47,7 @@ from utils.importer import FirebirdImporter
 from utils import rateio_contabil
 from utils import tipo_cadastro
 from utils import multivalor
+from utils import combo_busca
 # Reuso direto do casamento de produto (código / importação / auxiliar) já
 # validado no módulo de etiquetas — inclui o tratamento de '10000.0' e '10.000'.
 from telas.tela_importacao_planilha_estoque_producao import (
@@ -341,11 +342,15 @@ class TelaImportacaoNFe(ttk.Frame):
 
         tk.Label(linha2c, text="Centro de custo:", font=("Segoe UI", 9, "bold")).pack(
             side=tk.LEFT, padx=(14, 2))
-        self.cmb_cc = ttk.Combobox(linha2c, width=30, state="readonly", font=("Segoe UI", 9))
+        # sem readonly: com 202 centros de custo e 170 contas, rolar a lista é
+        # pior que digitar — combo_busca filtra conforme se digita
+        self.cmb_cc = ttk.Combobox(linha2c, width=30, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cmb_cc)
         self.cmb_cc.pack(side=tk.LEFT, padx=2)
         tk.Label(linha2c, text="Conta contábil:", font=("Segoe UI", 9, "bold")).pack(
             side=tk.LEFT, padx=(14, 2))
-        self.cmb_conta = ttk.Combobox(linha2c, width=34, state="readonly", font=("Segoe UI", 9))
+        self.cmb_conta = ttk.Combobox(linha2c, width=34, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cmb_conta)
         self.cmb_conta.pack(side=tk.LEFT, padx=2)
         self.lbl_escopo = tk.Label(linha2c, text="", font=("Segoe UI", 8), fg="#555")
         self.lbl_escopo.pack(side=tk.LEFT, padx=(6, 0))
@@ -897,11 +902,12 @@ class TelaImportacaoNFe(ttk.Frame):
             pass
         self.cmb_lc['values'] = [f"{r['c']} - {r['d']}" for r in lcs]
         self.cmb_vend['values'] = ["(nenhum)"] + [f"{r['c']} - {r['d']}" for r in vends]
-        self.cmb_cc['values'] = ["(nenhum)"] + [f"{r['c']} - {r['d']}" for r in ccs]
+        combo_busca.definir_valores(
+            self.cmb_cc, ["(nenhum)"] + [f"{r['c']} - {r['d']}" for r in ccs])
         # o código guardado é PLANO_CODIGO; a classificação vai só no rótulo
         self._conta_reduzido = {int(r['c']): r['r'] for r in contas}
-        self.cmb_conta['values'] = ["(nenhuma)"] + [
-            f"{r['c']} - {r['ct']} {r['d']}" for r in contas]
+        combo_busca.definir_valores(self.cmb_conta, ["(nenhuma)"] + [
+            f"{r['c']} - {r['ct']} {r['d']}" for r in contas])
         # Texto que não está mais na lista — registro apagado, filial trocada,
         # banco trocado — não pode ficar em tela: ele seria gravado na nota como
         # um código que não existe neste banco.

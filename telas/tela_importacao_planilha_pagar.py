@@ -12,6 +12,7 @@ from utils.firebird_service import FirebirdService
 from utils import tema
 from utils import rateio_contabil
 from utils import multivalor
+from utils import combo_busca
 
 CAMPOS_DISPONIVEIS = [
     ("N\u00famero Documento *", "numero_doc", True),
@@ -248,17 +249,33 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
         rateio_row.pack(fill=tk.X, pady=2)
         tk.Label(rateio_row, text="Centro de custo:",
                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
-        self.cb_centro_custo = ttk.Combobox(rateio_row, state="readonly", width=30,
-                                            font=("Segoe UI", 9))
+        self.cb_centro_custo = ttk.Combobox(rateio_row, width=30, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cb_centro_custo)
         self.cb_centro_custo.pack(side=tk.LEFT, padx=2)
         tk.Label(rateio_row, text="Conta contábil:",
                  font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(12, 2))
-        self.cb_conta_contabil = ttk.Combobox(rateio_row, state="readonly", width=34,
-                                              font=("Segoe UI", 9))
+        self.cb_conta_contabil = ttk.Combobox(rateio_row, width=34, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cb_conta_contabil)
         self.cb_conta_contabil.pack(side=tk.LEFT, padx=2)
         ttk.Button(rateio_row, text="↻", width=3,
                    command=self._carregar_rateio).pack(side=tk.LEFT, padx=(4, 0))
-        tk.Label(rateio_row, text="(opcional — vai no título importado)",
+        tk.Label(rateio_row, text="(digite para filtrar • opcional — vai no título)",
+                 font=("Segoe UI", 8), fg="#555").pack(side=tk.LEFT, padx=(6, 0))
+
+        # Conta da BAIXA: a parcela paga precisa dizer em que conta do plano ela
+        # foi baixada. Antes o código pegava a primeira conta que o SELECT
+        # devolvia (caiu no "1 - ATIVO", sintética, nível 1) e gravava
+        # TPARC_CONTA_REDUZIDO = 0, que não existe no plano — o ERP mostrava o
+        # campo preenchido e quebrava em qualquer movimentação.
+        baixa_row = ttk.Frame(content)
+        baixa_row.pack(fill=tk.X, pady=2)
+        tk.Label(baixa_row, text="Conta da baixa (banco/caixa):",
+                 font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(5, 2))
+        self.cb_conta_baixa = ttk.Combobox(baixa_row, width=44, font=("Segoe UI", 9))
+        combo_busca.tornar_pesquisavel(self.cb_conta_baixa)
+        self.cb_conta_baixa.pack(side=tk.LEFT, padx=2)
+        tk.Label(baixa_row, text="(obrigatória quando há parcela BAIXADA — é a conta "
+                                 "em que o pagamento saiu)",
                  font=("Segoe UI", 8), fg="#555").pack(side=tk.LEFT, padx=(6, 0))
         self._exercicio_contabil = None
         self._conta_reduzido = {}
@@ -411,6 +428,7 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
         config.set(secao, 'local_cobranca', self.cb_local_cobranca.get())
         config.set(secao, 'centro_custo', self.cb_centro_custo.get())
         config.set(secao, 'conta_contabil', self.cb_conta_contabil.get())
+        config.set(secao, 'conta_baixa', self.cb_conta_baixa.get())
         with open('config.ini', 'w', encoding='utf-8') as f:
             config.write(f)
         self.config = config
@@ -499,14 +517,16 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
             rot_cc = [rateio_contabil.ROTULO_SEM_CC, "Sem conexão com o ERP"]
             rot_ct = [rateio_contabil.ROTULO_SEM_CONTA, "Sem conexão com o ERP"]
         secao = 'IMPORTACAO_PAGAR'
+        # a conta da baixa sai da mesma lista de contas do plano
+        rot_baixa = list(rot_ct)
         for combo, valores, chave in ((self.cb_centro_custo, rot_cc, 'centro_custo'),
-                                      (self.cb_conta_contabil, rot_ct, 'conta_contabil')):
+                                      (self.cb_conta_contabil, rot_ct, 'conta_contabil'),
+                                      (self.cb_conta_baixa, rot_baixa, 'conta_baixa')):
             atual = combo.get()
-            combo['values'] = valores
             salvo = self.config.get(secao, chave, fallback='') if \
                 self.config.has_section(secao) else ''
             escolha = atual if atual in valores else (salvo if salvo in valores else valores[0])
-            combo.set(escolha)
+            combo_busca.definir_valores(combo, valores, manter=escolha)
 
     def _emp_fil_rateio(self):
         """Empresa/filial da seção de importação (os títulos usam as mesmas)."""
@@ -703,18 +723,28 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
             return cod
         return None
 
-    def _buscar_conta_padrao(self, fb, emp, fil):
-        exercicio = int(self.config.get('IMPORTACAO', 'exercicio', fallback='2026'))
+    def _conta_baixa_escolhida(self, fb, emp, fil):
+        """(exercicio, PLANO_CODIGO, PLANO_REDUZIDO) da conta da baixa, ou None.
+
+        `TPARC_CONTA` tem FK para a TABELA_PLANO (FK_TITPARC_PLANOCONTA) e o par
+        precisa ser real: nenhuma conta do plano tem reduzido 0, e conta
+        sintética (nível 1, reduzido NULL) não aceita lançamento. Por isso a
+        conta é ESCOLHIDA na tela e o reduzido vem do próprio cadastro — nunca
+        de um `or 0`.
+        """
+        codigo = rateio_contabil.codigo_do_rotulo(self.cb_conta_baixa.get())
+        if not codigo:
+            return None
         rows = fb.query(
-            "SELECT PLANO_CONTA, PLANO_REDUZIDO FROM TABELA_PLANO "
-            "WHERE PLANO_EMPRESA = ? AND PLANO_FILIAL = ? AND PLANO_EXERCICIO = ? AND PLANO_ATIVO = 'S'",
-            [emp, fil, exercicio]
-        )
-        for row in rows:
-            pc = row['plano_conta']
-            pr = row['plano_reduzido']
-            if pc is not None:
-                return (exercicio, int(pc), int(pr or 0))
+            "SELECT PLANO_EXERCICIO E, PLANO_REDUZIDO R FROM TABELA_PLANO "
+            "WHERE PLANO_EMPRESA = ? AND PLANO_FILIAL = ? AND PLANO_CODIGO = ? "
+            "  AND PLANO_REDUZIDO IS NOT NULL ORDER BY PLANO_EXERCICIO DESC",
+            [emp, fil, codigo])
+        if not rows:
+            raise ValueError(
+                f"a conta da baixa {codigo} não existe no plano com reduzido "
+                f"preenchido — escolha outra conta")
+        return (int(rows[0]['e']), int(codigo), int(rows[0]['r']))
         return (exercicio, 1, 1)
 
     def _analisar_bg(self, aba, mapa_colunas, linha_ini):
@@ -1147,6 +1177,20 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
             messagebox.showwarning("Aviso", "Selecione pelo menos um t\u00edtulo para importar.")
             return
 
+        # Parcela baixada tem de dizer em que conta foi paga; sem isso o ERP d\u00e1
+        # erro na primeira movimenta\u00e7\u00e3o. Barra aqui, antes de gravar nada.
+        baixadas = sum(1 for it in selecionados
+                       if it.get('_situacao') in ('Pago', 'Parcial', 'Cancelado'))
+        if baixadas and not rateio_contabil.codigo_do_rotulo(self.cb_conta_baixa.get()):
+            messagebox.showwarning(
+                "Conta da baixa",
+                f"{baixadas} t\u00edtulo(s) selecionados t\u00eam parcela BAIXADA (paga, parcial ou "
+                f"cancelada, que entra baixada na emiss\u00e3o).\n\n"
+                f"Escolha a \"Conta da baixa (banco/caixa)\" \u2014 \u00e9 a conta do plano em que o "
+                f"pagamento saiu. Sem ela a parcela fica sem conta e o ERP acusa erro "
+                f"em qualquer movimenta\u00e7\u00e3o.")
+            return
+
         resp = messagebox.askyesno("Confirmar",
             f"Deseja injetar os {len(selecionados)} t\u00edtulo(s) selecionados no Banco de Dados?\n"
             "Essa a\u00e7\u00e3o n\u00e3o pode ser desfeita.")
@@ -1370,7 +1414,7 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
             ult_grav = agora.strftime('%Y-%m-%d %H:%M:%S')
 
             with FirebirdService(self.config_db) as fb:
-                conta_pagar = self._buscar_conta_padrao(fb, emp, fil)
+                conta_baixa = self._conta_baixa_escolhida(fb, emp, fil)
 
                 # A PK do titulo (e o alvo da FK_TITPARC_TITULO) inclui a SERIE.
                 # Sem a serie na chave, um titulo que existe na serie '1' fazia o
@@ -1753,7 +1797,13 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
                                     0.0,
                                     parc_boleto or None,
                                     obs_parc,
-                                    emp, fil, conta_pagar[0], conta_pagar[1], conta_pagar[2],
+                                    # conta da baixa: par (código, reduzido) do
+                                    # plano, ou tudo NULL quando não foi escolhida
+                                    emp if conta_baixa else None,
+                                    fil if conta_baixa else None,
+                                    conta_baixa[0] if conta_baixa else None,
+                                    conta_baixa[1] if conta_baixa else None,
+                                    conta_baixa[2] if conta_baixa else None,
                                 ]
                                 try:
                                     cur.execute(sql_parc, params_parc)
