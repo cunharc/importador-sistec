@@ -325,6 +325,28 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
         except tk.TclError:
             pass
 
+    @staticmethod
+    def _reparticao(valor, valor_a_pagar, cancelado):
+        """Como o valor da linha se divide entre PAGO e EM ABERTO no ERP.
+
+        É a mesma decisão do plano de parcelas da importação (`_montar_plano`
+        usa este método), porque card e import não podem divergir: quem confere
+        a carga compara o card com o relatório do cliente.
+
+        Devolve (pago, aberto, qtde_parcelas).
+        """
+        if cancelado:
+            return valor, 0.0, 1                  # baixado na data de emissão
+        aberto = round(valor_a_pagar, 2)
+        pago_ef = round(valor - aberto, 2)
+        if pago_ef < 0:                            # saldo maior que o valor
+            pago_ef, aberto = 0.0, round(valor, 2)
+        if aberto <= 0.0:
+            return valor, 0.0, 1                   # parcela paga
+        if pago_ef <= 0.0:
+            return 0.0, valor, 1                   # parcela em aberto
+        return pago_ef, aberto, 2                  # parcial: pago + saldo
+
     def _atualizar_cards_resumo(self):
         """Recalcula os cards com os valores REAIS que vão para o ERP.
 
@@ -348,21 +370,20 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
             valor, pago, a_pagar = self._valores_cache(reg)
             situacao = reg.get('_situacao', '')
 
+            # Antes o card decidia pela situação e usava `a_pagar or valor` /
+            # `pago or valor`. Com a coluna "Valor a Pagar" mapeada, saldo 0 é
+            # informação — não ausência de informação —, mas 0.0 é falso em
+            # Python e o `or` trocava por o valor inteiro da conta: linha do
+            # cliente com STATUS "PAGO" e "Valor Pago" em branco (o export não
+            # preenche) caía em Aberto e entrava no card pelo valor cheio,
+            # inflando o "A PAGAR" em relação ao que o ERP recebia.
+            # Agora o card usa a mesma repartição do plano de parcelas.
             total += valor
-            if situacao == "Cancelado":
-                # entra baixado na emissão: o valor todo vira pago
-                pago_tot += valor
-                n_parcelas += 1
-            elif situacao == "Pago":
-                pago_tot += pago or valor
-                n_parcelas += 1
-            elif situacao == "Parcial":
-                pago_tot += pago
-                aberto_tot += a_pagar
-                n_parcelas += 2  # o parcial é gravado como duas parcelas
-            else:  # Aberto
-                aberto_tot += a_pagar or valor
-                n_parcelas += 1
+            p_item, a_item, n_item = self._reparticao(
+                valor, a_pagar, situacao == "Cancelado")
+            pago_tot += p_item
+            aberto_tot += a_item
+            n_parcelas += n_item
 
             cod = reg.get('_codigo_tit') or reg.get('_numero_doc_auto')
             if cod is not None:
@@ -1536,11 +1557,9 @@ class TelaImportacaoPlanilhaPagar(ttk.Frame):
                                 log_linhas.append(f"  {num_doc} \u2014 Parcela {parcela} valor {valor:.2f} CANCELADO (baixado na emissao)")
                                 continue
 
-                            aberto = round(valor_a_pagar, 2)
-                            pago_ef = round(valor - aberto, 2)
-                            if pago_ef < 0:
-                                pago_ef = 0.0
-                                aberto = round(valor, 2)
+                            # Mesma repartição que os cards mostram (uma função só)
+                            pago_ef, aberto, _n_parc = self._reparticao(
+                                valor, valor_a_pagar, False)
                             # Data da baixa (pagamento). Sem ela, a ERP mostra a
                             # parcela como em aberto mesmo com PG='S' e VALOR_PG.
                             data_pgto = data_receb or venc_parc or item_emissao

@@ -3,14 +3,21 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                   IMPORTADOR SISTEC                         │
-│                      VERSÃO 4.24                            │
-│                   Data: 12/08/2026                          │
+│                      VERSÃO 4.25                            │
+│                   Data: 13/08/2026                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## MÓDULOS POR VERSÃO
 
-### ✅ VERSÃO 4.24 - RELEASE ATUAL (12/08/2026)
+### ✅ VERSÃO 4.25 - RELEASE ATUAL (13/08/2026)
+
+| Módulo                     | Status    | Descrição                                    |
+|----------------------------|-----------|----------------------------------------------|
+| Importação Pagar           | ✅ PRONTO | 🐞 **O card “A PAGAR (EM ABERTO)” mostrava mais do que a importação gravava: R$ 656.344,97 contra os R$ 542.075,91 da planilha.** A importação para o ERP estava **certa** — o erro era só na conta do card. Causa: ele somava `a_pagar or valor`; com a coluna “Valor a Pagar” mapeada, saldo **0,00 é informação** (título quitado), mas `0.0` é falso em Python e o `or` trocava o zero pelo **valor cheio da conta**. Na planilha da FABENE isso pegou **40 linhas** com STATUS `PAGO` cujo “Valor Pago” o export deixou em branco: sem valor pago o sistema as classificava como *Aberto* e o card as somava inteiras — exatamente os **R$ 114.269,06** de diferença. Agora o card usa a **mesma repartição do plano de parcelas** da importação (uma função só, `_reparticao`), então card e ERP não podem mais divergir: o A PAGAR fecha nos **542.075,91** e `VALOR TOTAL = VALOR PAGO + A PAGAR` fecha ao centavo nas 9.444 linhas. O plano de parcelas foi conferido linha por linha antes e depois — **nada mudou no que vai para o ERP** |
+| Importação Receber         | ✅ PRONTO | 🐞 **O mesmo erro de card existia no Contas a Receber, em três lugares** (`valor_a_receber or valor` e `valor_recebido or valor`), com a mesma consequência: título quitado com a coluna de saldo em 0,00 entrava no “EM ABERTO” pelo valor cheio, e o card não fechava com o ERP. Corrigido pela mesma função de repartição, idêntica à do Pagar (as duas telas conferidas lado a lado). A gravação no ERP também não mudou aqui |
+
+### ✅ VERSÃO 4.24 (12/08/2026)
 
 | Módulo                     | Status    | Descrição                                    |
 |----------------------------|-----------|----------------------------------------------|

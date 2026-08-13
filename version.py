@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Controle de versão do sistema."""
 
-VERSAO = "4.24"
-DATA_VERSAO = "12/08/2026"
+VERSAO = "4.25"
+DATA_VERSAO = "13/08/2026"
 
 MODULOS = {
     "Notas Fiscais (XML)": {

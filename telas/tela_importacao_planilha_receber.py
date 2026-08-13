@@ -740,13 +740,10 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                 if situacao == "Cancelado":
                     if trazer_parcelas:
                         total_recebido += valor
-                elif situacao == "Recebido":
-                    total_recebido += valor_recebido
-                elif situacao == "Parcial":
-                    total_recebido += valor_recebido
-                    total_aberto += valor_a_receber
-                else:  # Aberto
-                    total_aberto += valor_a_receber or valor
+                else:
+                    rec_item, ab_item, _n = self._reparticao(valor, valor_a_receber, False)
+                    total_recebido += rec_item
+                    total_aberto += ab_item
             reg['_situacao'] = situacao
 
             tag = 'OK' if status == 'OK' else 'ERRO'
@@ -860,6 +857,28 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
             if ok_status and ok_situacao:
                 self.tree.move(item_id, '', tk.END)
 
+    @staticmethod
+    def _reparticao(valor, valor_a_receber, cancelado):
+        """Como o valor da linha se divide entre BAIXADO e EM ABERTO no ERP.
+
+        Mesma decisão do plano de parcelas da importação. Existe porque os cards
+        usavam `valor_a_receber or valor`: com a coluna de saldo mapeada, saldo 0
+        é informação (título quitado), mas 0.0 é falso em Python e o `or` trocava
+        pelo valor cheio da conta — o card mostrava mais "em aberto" do que o ERP
+        recebia. Devolve (recebido, aberto, qtde_parcelas).
+        """
+        if cancelado:
+            return valor, 0.0, 1                  # baixado na data de emissão
+        aberto = round(valor_a_receber, 2)
+        recebido = round(valor - aberto, 2)
+        if recebido < 0:                           # saldo maior que o valor
+            recebido, aberto = 0.0, round(valor, 2)
+        if aberto <= 0.0:
+            return valor, 0.0, 1                   # parcela baixada
+        if recebido <= 0.0:
+            return 0.0, valor, 1                   # parcela em aberto
+        return recebido, aberto, 2                 # parcial: baixado + saldo
+
     def _atualizar_cards_resumo(self):
         """Calcula e atualiza os valores nos cards de resumo."""
         total_conta = 0.0
@@ -891,18 +910,15 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
 
             total_conta += valor
 
-            if situacao == "Recebido":
-                total_recebido += valor_recebido or valor
-            elif situacao == "Parcial":
-                total_recebido += valor_recebido
-                total_aberto += valor_a_receber
-            elif situacao == "Cancelado":
+            if situacao == "Cancelado":
                 # Baixado na emissao -> conta como recebido/baixado (so quando
                 # "trazer" esta ligado, para os cards fecharem com o ERP).
                 if trazer:
                     total_recebido += valor
-            elif situacao == "Aberto":
-                total_aberto += valor_a_receber or valor
+            else:
+                rec_item, ab_item, _n = self._reparticao(valor, valor_a_receber, False)
+                total_recebido += rec_item
+                total_aberto += ab_item
 
         self.card_total_conta.lbl_valor.config(text=f"R$ {total_conta:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
         self.card_recebido.lbl_valor.config(text=f"R$ {total_recebido:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
@@ -1499,11 +1515,9 @@ class TelaImportacaoPlanilhaReceber(ttk.Frame):
                                 log_linhas.append(f"  {num_doc} \u2014 Parcela {parcela} valor {valor:.2f} CANCELADO (baixado na emissao)")
                                 continue
 
-                            aberto = round(valor_a_receber, 2)
-                            pago = round(valor - aberto, 2)
-                            if pago < 0:
-                                pago = 0.0
-                                aberto = round(valor, 2)
+                            # Mesma repartição que os cards mostram (uma função só)
+                            pago, aberto, _n_parc = self._reparticao(
+                                valor, valor_a_receber, False)
                             baixa = data_receb or emissao_item
 
                             if aberto <= 0.0:
